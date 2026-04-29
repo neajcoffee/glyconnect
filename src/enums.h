@@ -51,6 +51,7 @@ enum class BG_SOURCE : uint8_t {
     API = 4,
     LIBRELINKUP = 5,
     MEDTRUM = 6,
+    BLE_DIRECT = 7,  // Lecture directe G6 via BLE
 };
 
 enum class DEXCOM_SERVER : uint8_t {
@@ -158,6 +159,8 @@ inline String toString(BG_SOURCE source) {
             return "LIBRELINKUP";
         case BG_SOURCE::MEDTRUM:
             return "MEDTRUM";
+        case BG_SOURCE::BLE_DIRECT:
+            return "BLE_DIRECT";
         default:
             return "unknown";
     }

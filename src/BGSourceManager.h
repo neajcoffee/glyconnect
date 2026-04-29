@@ -25,6 +25,7 @@ public:
     std::list<GlucoseReading> getGlucoseData();
     BG_SOURCE getCurrentSourceType() const { return currentSourceType; }
     String getSourceStatus() const { return (bgSource) ? bgSource->getStatus() : "unknown"; }
+    BGSource* getSource() const { return bgSource; }
 
 private:
     BGSourceManager_();

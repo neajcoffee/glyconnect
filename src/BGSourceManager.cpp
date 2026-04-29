@@ -1,5 +1,6 @@
 #include "BGSourceManager.h"
 
+#include "BGSourceBLEDirect.h"
 #include "ServerManager.h"
 
 // Define the static getInstance method
@@ -36,6 +37,9 @@ void BGSourceManager_::setup(BG_SOURCE bgSourceType) {
             break;
         case BG_SOURCE::MEDTRUM:
             bgSource = new BGSourceMedtrum();
+            break;
+        case BG_SOURCE::BLE_DIRECT:
+            bgSource = new BGSourceBLEDirect();
             break;
         default:
             DEBUG_PRINTLN(
