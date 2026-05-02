@@ -7,10 +7,23 @@
 <style>
   :root{--bg:#0e1116;--panel:#161b22;--border:#30363d;--text:#c9d1d9;--accent:#58a6ff;--green:#2ea043}
   *{box-sizing:border-box}
-  body{margin:0 auto;padding:14px;font-family:-apple-system,system-ui,sans-serif;background:var(--bg);color:var(--text);max-width:none}
-  body > h1,body > p,body > .step{max-width:540px;margin-left:auto;margin-right:auto}
-  body > .step.canvas-step{max-width:1300px}
-  .step.canvas-step > h2,.step.canvas-step > .pal-panel,.step.canvas-step > .row,.step.canvas-step > .canvas-toolbar,.step.canvas-step > .small{max-width:540px;margin-left:auto;margin-right:auto}
+  body{margin:0 auto;padding:14px;font-family:-apple-system,system-ui,sans-serif;background:var(--bg);color:var(--text);max-width:560px}
+  .studio-header h1{font-size:20px;margin:0 0 6px;color:var(--accent)}
+  .studio-header .intro{font-size:13px;opacity:0.75;margin:0 0 18px;line-height:1.5}
+
+  /* === MODE STUDIO (desktop ≥ 900px) ====================================== */
+  @media (min-width:900px){
+    body{max-width:1400px;height:100vh;padding:14px 20px;box-sizing:border-box;display:grid;grid-template-columns:1fr 360px;grid-template-rows:auto 1fr auto;grid-template-areas:"header header" "main side" "main code";gap:12px 18px;overflow:hidden}
+    body > .studio-header{grid-area:header;margin:0}
+    body > .studio-header .intro{margin:0;font-size:12px}
+    body > .studio-side{grid-area:side;overflow-y:auto;display:flex;flex-direction:column;gap:14px;padding-right:4px}
+    body > .studio-side .step{margin-top:0}
+    body > .canvas-step{grid-area:main;min-height:0;display:flex;flex-direction:column;margin:0}
+    body > .canvas-step .canvas-wrap{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;width:100%}
+    body > .canvas-step #canvas{width:auto;height:auto;max-width:100%;max-height:100%;aspect-ratio:32/8}
+    body > #stepCode{grid-area:code;margin-top:0}
+    body.focus-mode{display:block;height:auto;padding:0}
+  }
   h1{font-size:20px;margin:0 0 6px;color:var(--accent)}
   .intro{font-size:13px;opacity:0.75;margin:0 0 18px;line-height:1.5}
   label{display:block;font-size:13px;margin:14px 0 4px;opacity:0.85}
@@ -82,25 +95,29 @@
   body.focus-mode .row.drawer-open{display:flex;flex-direction:column;position:fixed;bottom:54px;left:8px;right:8px;z-index:55;background:var(--panel);border:1px solid var(--border);border-radius:10px 10px 6px 6px;padding:14px;box-shadow:0 -4px 30px rgba(0,0,0,0.7);animation:slideUp .18s ease-out}
   @keyframes slideUp{from{transform:translateY(16px);opacity:0}to{transform:translateY(0);opacity:1}}
 
-  /* Bandeau couleurs récentes — toujours visible en focus, tout en bas */
-  .recent-strip{display:none;position:fixed;bottom:0;left:0;right:0;z-index:50;background:rgba(14,17,22,0.94);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-top:1px solid var(--border);padding:8px 10px;gap:6px;align-items:center;overflow-x:auto;height:46px}
-  body.focus-mode .recent-strip{display:flex}
-  .recent-strip .sw{width:28px;height:28px;border:1.5px solid #30363d;border-radius:5px;flex-shrink:0}
-  .recent-strip .sw.active{border-color:var(--accent);border-width:2px;transform:scale(1.08)}
-  .recent-strip .recent-lbl{font-size:9px;opacity:0.5;flex-shrink:0;margin-right:2px}
-
   /* Canvas en mode focus : edge-to-edge, sens le plus long de l'écran */
-  body.focus-mode .canvas-wrap{position:fixed;top:44px;bottom:46px;left:0;right:0;margin:0;padding:0;width:auto;height:auto}
-  body.focus-mode #canvas{position:absolute;top:50%;left:50%;width:min(100vw,calc((100vh - 90px) * 4));aspect-ratio:32/8;transform:translate(-50%,-50%)}
+  body.focus-mode .canvas-wrap{position:fixed;top:44px;bottom:0;left:0;right:0;margin:0;padding:0;width:auto;height:auto}
+  body.focus-mode #canvas{position:absolute;top:50%;left:50%;width:min(100vw,calc((100vh - 44px) * 4));aspect-ratio:32/8;transform:translate(-50%,-50%)}
+
+  /* Portrait : matrice rotée 90°, barre d'outils en sidebar verticale à gauche */
   @media (orientation:portrait){
-    body.focus-mode #canvas{width:min(calc(100vh - 90px),calc(100vw * 4));transform:translate(-50%,-50%) rotate(90deg)}
+    body.focus-mode .focus-tools{top:0;bottom:0;left:0;right:auto;width:48px;height:auto;flex-direction:column;border-bottom:none;border-right:1px solid var(--border);padding:8px 4px;gap:4px}
+    body.focus-mode .ftb{width:40px;height:40px;padding:0;justify-content:center}
+    body.focus-mode .ftb-label{display:none}
+    body.focus-mode .ftb svg{width:18px;height:18px}
+    body.focus-mode .canvas-wrap{top:0;bottom:0;left:48px;right:0}
+    body.focus-mode #canvas{width:min(calc(100vh),calc((100vw - 48px) * 4));transform:translate(-50%,-50%) rotate(90deg)}
+    /* Drawers : slide depuis le côté gauche (à côté de la sidebar) */
+    body.focus-mode .pal-panel.drawer-open,
+    body.focus-mode .row.drawer-open{bottom:auto;top:8px;left:56px;right:8px;max-height:calc(100vh - 16px);animation:slideRight .18s ease-out}
+    @keyframes slideRight{from{transform:translateX(-12px);opacity:0}to{transform:translateX(0);opacity:1}}
   }
 </style>
 </head>
 <body>
 
 <div class="focus-tools" id="focusTools">
-  <button class="ftb" id="btnPalette" onclick="toggleDrawer('palette')">
+  <button class="ftb" id="btnPalette" onclick="toggleDrawer('palette')" title="Couleurs">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/>
       <circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/>
@@ -108,7 +125,7 @@
       <circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/>
       <path d="M12 22a10 10 0 1 1 0-20 10 10 0 0 1 10 10c0 3-2 5-5 5h-2a1.7 1.7 0 0 0-1.7 1.7c0 .5.2.9.4 1.2.3.3.4.7.4 1.1 0 .9-.7 1.7-1.6 1.7-.2 0-.3 0-.5-.1z"/>
     </svg>
-    Couleurs
+    <span class="ftb-label">Couleurs</span>
   </button>
   <button class="ftb tool-btn active" data-tool="pen" onclick="setTool('pen')" title="Stylo" aria-label="Stylo">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -122,61 +139,73 @@
       <path d="M5 11l9 9"/>
     </svg>
   </button>
-  <button class="ftb" id="btnTools" onclick="toggleDrawer('tools')">
+  <button class="ftb tool-btn" data-tool="auto" onclick="setTool('auto')" title="Auto — clic = peint, re-clic même couleur = efface" aria-label="Auto">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="1" y="6" width="22" height="12" rx="6"/>
+      <circle cx="16" cy="12" r="3" fill="currentColor"/>
+    </svg>
+  </button>
+  <button class="ftb" id="btnTools" onclick="toggleDrawer('tools')" title="Outils">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
     </svg>
-    Outils
+    <span class="ftb-label">Outils</span>
   </button>
   <span class="ftb-spacer"></span>
-  <button class="ftb" id="focusExitBtn" onclick="toggleFocus()">
+  <button class="ftb" id="focusExitBtn" onclick="toggleFocus()" title="Quitter">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M8 3v3a2 2 0 0 1-2 2H3"/>
       <path d="M21 8h-3a2 2 0 0 1-2-2V3"/>
       <path d="M3 16h3a2 2 0 0 1 2 2v3"/>
       <path d="M16 21v-3a2 2 0 0 1 2-2h3"/>
     </svg>
-    Quitter
+    <span class="ftb-label">Quitter</span>
   </button>
 </div>
 
-<div class="recent-strip" id="recentStrip"></div>
+<header class="studio-header focus-hide">
+  <h1>Glyconnect Studio</h1>
+  <p class="intro">Dessine une image sur la matrice. Le code se génère automatiquement en bas. Copie le et colle dans la partie "Decoration" de ta page Glyconnect</p>
+</header>
 
-<h1 class="focus-hide">Glyconnect Studio</h1>
-<p class="intro focus-hide">Dessine une image sur la matrice. Le code se génère automatiquement en bas. Copie le et colle dans la partie "Decoration" de ta page Glyconnect</p>
-
-<div class="step focus-hide">
-  <h2>1. Donne un nom à ton design</h2>
-  <input type="text" id="presetName" placeholder="ex: licorne, étoile, mon-chat" maxlength="20" oninput="updateOutput()">
-</div>
-
-<div class="step canvas-step">
-  <h2 class="focus-hide">2. Choisis une couleur puis dessine sur la matrice</h2>
-  <div class="pal-panel" id="palette"></div>
-
-  <div class="row">
-    <div>
-      <div class="small" style="margin-bottom:4px;">Déplacer la grille</div>
-      <div class="shift-grid">
-        <button class="empty"></button>
-        <button onclick="shiftGrid(0,-1)" title="Haut">↑</button>
-        <button class="empty"></button>
-        <button onclick="shiftGrid(-1,0)" title="Gauche">←</button>
-        <button onclick="shiftGrid(0,0,true)" title="Centrer">⌂</button>
-        <button onclick="shiftGrid(1,0)" title="Droite">→</button>
-        <button class="empty"></button>
-        <button onclick="shiftGrid(0,1)" title="Bas">↓</button>
-        <button class="empty"></button>
-      </div>
-    </div>
-
-    <div style="flex:1;min-width:140px;">
-      <div class="small" style="margin-bottom:4px;">Outils</div>
-      <button onclick="clearAll()">Effacer</button>
-      <button onclick="invertCanvas()">⇅ Inverser</button>
-    </div>
+<aside class="studio-side focus-hide">
+  <div class="step">
+    <h2>1. Nom du design</h2>
+    <input type="text" id="presetName" placeholder="ex: licorne, étoile, mon-chat" maxlength="20" oninput="updateOutput()">
   </div>
 
+  <div class="step">
+    <h2>2. Couleur</h2>
+    <div class="pal-panel" id="palette"></div>
+  </div>
+
+  <div class="step">
+    <h2>3. Outils</h2>
+    <div class="row">
+      <div>
+        <div class="small" style="margin-bottom:4px;">Déplacer la grille</div>
+        <div class="shift-grid">
+          <button class="empty"></button>
+          <button onclick="shiftGrid(0,-1)" title="Haut">↑</button>
+          <button class="empty"></button>
+          <button onclick="shiftGrid(-1,0)" title="Gauche">←</button>
+          <button onclick="shiftGrid(0,0,true)" title="Centrer">⌂</button>
+          <button onclick="shiftGrid(1,0)" title="Droite">→</button>
+          <button class="empty"></button>
+          <button onclick="shiftGrid(0,1)" title="Bas">↓</button>
+          <button class="empty"></button>
+        </div>
+      </div>
+      <div style="flex:1;min-width:140px;">
+        <div class="small" style="margin-bottom:4px;">Effacer / inverser</div>
+        <button onclick="clearAll()">Effacer</button>
+        <button onclick="invertCanvas()">⇅ Inverser</button>
+      </div>
+    </div>
+  </div>
+</aside>
+
+<div class="step canvas-step">
   <div class="canvas-toolbar">
     <button class="ftb tool-btn active" data-tool="pen" onclick="setTool('pen')" title="Stylo" aria-label="Stylo">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -190,31 +219,31 @@
         <path d="M5 11l9 9"/>
       </svg>
     </button>
+    <button class="ftb tool-btn" data-tool="auto" onclick="setTool('auto')" title="Auto — clic = peint, re-clic même couleur = efface" aria-label="Auto">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="1" y="6" width="22" height="12" rx="6"/>
+        <circle cx="16" cy="12" r="3" fill="currentColor"/>
+      </svg>
+    </button>
     <span style="flex:1"></span>
     <button class="focus-btn" id="focusBtn" onclick="toggleFocus()">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" id="focusIconOpen">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M8 3H5a2 2 0 0 0-2 2v3"/>
         <path d="M21 8V5a2 2 0 0 0-2-2h-3"/>
         <path d="M3 16v3a2 2 0 0 0 2 2h3"/>
         <path d="M16 21h3a2 2 0 0 0 2-2v-3"/>
       </svg>
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" id="focusIconClose" style="display:none;">
-        <path d="M8 3v3a2 2 0 0 1-2 2H3"/>
-        <path d="M21 8h-3a2 2 0 0 1-2-2V3"/>
-        <path d="M3 16h3a2 2 0 0 1 2 2v3"/>
-        <path d="M16 21v-3a2 2 0 0 1 2-2h3"/>
-      </svg>
-      <span id="focusLabel">Plein écran</span>
+      <span>Plein écran</span>
     </button>
   </div>
   <div class="canvas-wrap">
     <div id="canvas"></div>
   </div>
-  <div class="small focus-hide">Cliquer/glisser pour peindre. Re-cliquer un pixel pour l'effacer.</div>
+  <div class="small focus-hide">Cliquer/glisser pour peindre.</div>
 </div>
 
-<div class="step focus-hide">
-  <h2>3. Code à copier-coller</h2>
+<div class="step focus-hide" id="stepCode">
+  <h2>4. Code à copier-coller</h2>
   <div class="code-wrap">
     <textarea id="output" readonly placeholder="Dessine quelque chose, le code apparaîtra ici…"></textarea>
     <button class="copy-btn" id="copyBtn" onclick="copyOutput()" title="Copier" aria-label="Copier">
@@ -234,7 +263,8 @@
 const W = 32, H = 8;
 let pixels = new Array(W*H).fill('#000000');
 let currentColor = '#FF0000';
-let currentTool = 'pen';  // 'pen' ou 'eraser'
+let currentTool = 'pen';  // 'pen' | 'eraser' | 'auto'
+let dragMode = 1;  // utilisé seulement en mode 'auto'
 
 function setTool(t) {
   currentTool = t;
@@ -271,6 +301,12 @@ function buildPalette() {
   const p = document.getElementById('palette');
   p.innerHTML = '';
 
+  // Ligne récents (mise à jour via renderRecent)
+  const rrow = document.createElement('div');
+  rrow.className = 'pal-row';
+  rrow.innerHTML = '<div class="lbl">Récents</div><div class="swatches" id="paletteRecentSwatches"></div>';
+  p.appendChild(rrow);
+
   // Ligne gris/blanc/noir
   const grays = ['#FFFFFF','#D0D0D0','#A0A0A0','#707070','#404040','#202020','#000000'];
   const grow = document.createElement('div');
@@ -292,7 +328,6 @@ function buildPalette() {
     for (const l of LIGHTNESS) {
       sws.appendChild(makeSwatch(hsl2hex(hue.h, 100, l)));
     }
-    // Variantes saturation moyenne
     sws.appendChild(makeSwatch(hsl2hex(hue.h, 60, 55)));
     sws.appendChild(makeSwatch(hsl2hex(hue.h, 40, 65)));
     row.appendChild(sws);
@@ -325,9 +360,9 @@ function setColor(c) {
 }
 
 function renderRecent() {
-  const el = document.getElementById('recentStrip');
+  const el = document.getElementById('paletteRecentSwatches');
   if (!el) return;
-  el.innerHTML = '<span class="recent-lbl">Récents</span>';
+  el.innerHTML = '';
   const colors = recentColors.length ? recentColors : [currentColor];
   for (const c of colors) {
     const sw = document.createElement('div');
@@ -347,9 +382,9 @@ function buildCanvas() {
     const px = document.createElement('div');
     px.dataset.i = i;
     px.style.background = pixels[i];
-    px.addEventListener('mousedown', e => { e.preventDefault(); paint(i); });
+    px.addEventListener('mousedown', e => { e.preventDefault(); paintStart(i); });
     px.addEventListener('mouseenter', e => { if (e.buttons & 1) paint(i); });
-    px.addEventListener('touchstart', e => { e.preventDefault(); paint(i); });
+    px.addEventListener('touchstart', e => { e.preventDefault(); paintStart(i); });
     c.appendChild(px);
   }
   c.addEventListener('touchmove', e => {
@@ -360,9 +395,21 @@ function buildCanvas() {
   });
 }
 
+function paintStart(i) {
+  // En mode auto : décide une fois pour tout le drag (clic sur même couleur = efface)
+  if (currentTool === 'auto') {
+    dragMode = (pixels[i] !== '#000000' && pixels[i].toUpperCase() === currentColor.toUpperCase()) ? 0 : 1;
+  }
+  paint(i);
+}
+
 function paint(i) {
-  pixels[i] = (currentTool === 'pen') ? currentColor : '#000000';
-  document.getElementById('canvas').children[i].style.background = pixels[i];
+  let v;
+  if (currentTool === 'pen') v = currentColor;
+  else if (currentTool === 'eraser') v = '#000000';
+  else v = (dragMode === 1) ? currentColor : '#000000';  // auto
+  pixels[i] = v;
+  document.getElementById('canvas').children[i].style.background = v;
   updateOutput();
 }
 
