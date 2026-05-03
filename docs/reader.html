@@ -118,12 +118,28 @@
       pointer-events: none;
     }
 
+    /* Wrapper pour superposer pred/delta sous la valeur sans décaler le flex centering */
+    #led-value-wrap {
+      position: relative;
+      display: inline-block;
+    }
+
     /* Canvas LED — rendu pixel-art net, pas d'anti-aliasing */
     #led-value {
       display: block;
       image-rendering: pixelated;
       image-rendering: crisp-edges;
       margin: 0 auto;
+    }
+
+    /* Canvas pred + delta : positionnés absolument SOUS la valeur, ne décalent rien */
+    #led-extra-pred,
+    #led-extra-delta {
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
     }
 
     #mmol-value {
@@ -315,8 +331,11 @@
 
   <!-- Affichage principal -->
   <div id="screen-main" class="screen" style="display:none">
-    <canvas id="led-value"></canvas>
-    <canvas id="led-extra" style="display:none;image-rendering:pixelated;margin-top:0"></canvas>
+    <div id="led-value-wrap">
+      <canvas id="led-value"></canvas>
+      <canvas id="led-extra-pred"  style="display:none;image-rendering:pixelated"></canvas>
+      <canvas id="led-extra-delta" style="display:none;image-rendering:pixelated"></canvas>
+    </div>
     <div id="mmol-value" style="display:none">-- mmol/L</div>
   </div>
 
@@ -869,12 +888,17 @@
     }
 
     // ── Canvas secondaire (prédiction / delta) ──
-    function drawExtraCanvas(keys, colors) {
-      const canvas = document.getElementById('led-extra');
-      if (!canvas) return;
-      if (!keys.length) { canvas.style.display = 'none'; return; }
+    // ps = FIXED_PS / 2 → diviseur exact de la grille de fond → pixels alignés.
+    // Chaque canvas est positionné absolument sous la valeur, ne décale rien.
+    const EXTRA_TOP_GAP = 6;        // px entre la valeur et le 1er bloc (pred)
+    const EXTRA_INTER_GAP = 4;      // px entre pred et delta
 
-      const ps  = Math.max(6, Math.floor(FIXED_PS * 0.58));
+    function drawSingleExtra(canvasId, keys, colors, topPx) {
+      const canvas = document.getElementById(canvasId);
+      if (!canvas) return 0;
+      if (!keys.length) { canvas.style.display = 'none'; return 0; }
+
+      const ps  = Math.max(6, Math.floor(FIXED_PS / 2));
       const dpr = window.devicePixelRatio || 1;
       const CH  = 7, CGAP = 1;
       const widths    = keys.map(k => GLYPH[k]?.[0]?.length ?? 5);
@@ -889,6 +913,7 @@
       canvas.height       = cH * dpr;
       canvas.style.width  = cW + 'px';
       canvas.style.height = cH + 'px';
+      canvas.style.top    = topPx + 'px';
       canvas.style.display = 'block';
 
       const ctx = canvas.getContext('2d');
@@ -918,6 +943,16 @@
         col0 += gW + CGAP;
       });
       ctx.shadowBlur = 0;
+      return cH;  // hauteur effective utilisée
+    }
+
+    function drawExtraCanvas(predKeys, predClrs, deltaKeys, deltaClrs) {
+      // Position en bas du led-value (parent wrap)
+      const valueCanvas = document.getElementById('led-value');
+      const baseTop = (valueCanvas?.clientHeight || 0) + EXTRA_TOP_GAP;
+      const predHeight = drawSingleExtra('led-extra-pred', predKeys, predClrs, baseTop);
+      const deltaTop = baseTop + (predHeight ? predHeight + EXTRA_INTER_GAP : 0);
+      drawSingleExtra('led-extra-delta', deltaKeys, deltaClrs, deltaTop);
     }
 
     // ── Bouton config pixel orange ──
@@ -1077,19 +1112,21 @@
       const digits     = String(sgv).split('');
       drawLEDDisplay(digits, color, arrowKey, arrowColor);
 
-      // Canvas secondaire : prédiction ou delta
+      // Canvas secondaire : prédiction et delta empilés verticalement, séparés
       const extraColor = getExtraColor(isStale);
-      const extraKeys  = [];
-      const extraClrs  = [];
+      const predKeys  = [];
+      const predClrs  = [];
       if (cfg.prediction && predicted != null) {
-        String(Math.round(predicted)).split('').forEach(d => { extraKeys.push(d); extraClrs.push(extraColor); });
+        String(Math.round(predicted)).split('').forEach(d => { predKeys.push(d); predClrs.push(extraColor); });
       }
+      const deltaKeys = [];
+      const deltaClrs = [];
       if (cfg.delta && prevSgv !== null) {
         const d    = sgv - prevSgv;
         const sign = d >= 0 ? '+' : '-';
-        [sign, ...String(Math.abs(d)).split('')].forEach(k => { extraKeys.push(k); extraClrs.push(extraColor); });
+        [sign, ...String(Math.abs(d)).split('')].forEach(k => { deltaKeys.push(k); deltaClrs.push(extraColor); });
       }
-      drawExtraCanvas(extraKeys, extraClrs);
+      drawExtraCanvas(predKeys, predClrs, deltaKeys, deltaClrs);
 
       const $mmol = document.getElementById('mmol-value');
       $mmol.textContent = toMmol(sgv) + ' MMOL/L';
