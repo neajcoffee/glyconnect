@@ -1,0 +1,1278 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#000000">
+  <title>Glucose</title>
+  <link rel="manifest" id="pwa-manifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Doto:wght@100..900&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html, body {
+      width: 100%; height: 100%;
+      overflow: hidden;
+      background: #050505;
+      font-family: 'Doto', 'Courier New', monospace;
+      -webkit-tap-highlight-color: transparent;
+      -webkit-user-select: none;
+      user-select: none;
+      -webkit-font-smoothing: none;
+    }
+
+
+    /* Hypo sévère : fond qui pulse */
+    @keyframes hypo-flash {
+      0%, 100% { background-color: var(--bg, #070707); }
+      50%       { background-color: #1a0000; }
+    }
+    body.hypo-alert { animation: hypo-flash 2s ease-in-out infinite; }
+
+    /* ── Masque contenu (efface les pixels de fond dans la zone centrale) ── */
+    #content-mask {
+      position: fixed;
+      display: none;
+      background: #050505;
+      z-index: 1;
+      pointer-events: none;
+    }
+
+    /* ── Écrans ── */
+    .screen {
+      position: fixed;
+      inset: 0;
+      bottom: var(--footer-h, 72px);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 2;
+    }
+
+    /* ── Chargement pixel ── */
+    #loading-canvas {
+      display: block;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+      margin-bottom: 3vw;
+    }
+
+    #loading-text {
+      color: #00DD44;
+      font-size: clamp(6px, 1.6vw, 13px);
+      letter-spacing: 0.08em;
+      text-shadow: 0 0 10px rgba(0,221,68,0.5);
+      text-align: center;
+      padding: 0 8%;
+      line-height: 2.4;
+    }
+
+    /* ── Erreur ── */
+    #error-icon {
+      font-size: clamp(28px, 8vw, 64px);
+      margin-bottom: 5vw;
+    }
+
+    #error-title {
+      color: #FF3B30;
+      font-size: clamp(7px, 1.8vw, 15px);
+      margin-bottom: 4vw;
+      text-align: center;
+      text-shadow: 0 0 12px rgba(255,59,48,0.6);
+      line-height: 2.2;
+    }
+
+    #error-sub {
+      color: #333;
+      font-size: clamp(6px, 1.3vw, 11px);
+      text-align: center;
+      padding: 0 8%;
+      line-height: 2.4;
+    }
+
+    #retry-text {
+      color: #222;
+      font-size: clamp(5px, 1.2vw, 10px);
+      margin-top: 6vw;
+      letter-spacing: 0.05em;
+    }
+
+    /* ── Affichage principal ── */
+    #screen-main {
+      gap: 0;
+    }
+
+    /* Grille LED plein écran */
+    #led-bg {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+      pointer-events: none;
+    }
+
+    /* Canvas LED — rendu pixel-art net, pas d'anti-aliasing */
+    #led-value {
+      display: block;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+      margin: 0 auto;
+    }
+
+    #mmol-value {
+      font-size: clamp(7px, 1.8vw, 15px);
+      color: #0d4020;
+      margin-top: 3vw;
+      letter-spacing: 0.06em;
+      transition: color 0.5s ease;
+    }
+
+    /* ── Footer ── */
+    #footer {
+      position: fixed;
+      bottom: 0; left: 0; right: 0;
+      height: var(--footer-h, 72px);
+      background: #050505;
+      border-top: 1px solid #111;
+      display: flex;
+      align-items: center;
+      padding: 0 clamp(12px, 3vw, 24px);
+      gap: 0;
+      z-index: 2;
+    }
+
+    /* Zone centre : infos (delta, mmol, temps…) */
+    #footer-info {
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      pointer-events: none;
+    }
+
+    /* Zone droite : delta + boutons */
+    #footer-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: clamp(8px, 2vw, 16px);
+      flex: 1;
+    }
+
+    @keyframes dot-pulse {
+      0%, 100% { opacity: 1;   box-shadow: 0 0 0 0   rgba(0,221,68,0.6); }
+      50%       { opacity: 0.4; box-shadow: 0 0 0 6px rgba(0,221,68,0);   }
+    }
+
+    /* Dots carrés comme des pixels LED */
+    .dot {
+      width:  clamp(6px, 1.2vw, 10px);
+      height: clamp(6px, 1.2vw, 10px);
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
+    .dot-green  { background: #00DD44; box-shadow: 0 0 6px rgba(0,221,68,0.9); animation: dot-pulse 2s ease-in-out infinite; }
+    .dot-orange { background: #FF9500; box-shadow: 0 0 6px rgba(255,149,0,0.9); }
+    .dot-red    { background: #FF3B30; box-shadow: 0 0 6px rgba(255,59,48,0.9); }
+
+    /* Infos footer : delta + temps */
+    .footer-label {
+      font-family: 'Doto', monospace;
+      font-weight: 900;
+      font-size: clamp(12px, 2.4vw, 20px);
+      letter-spacing: 0.1em;
+      color: #888;
+    }
+
+    /* Bouton d'action générique */
+    .btn-action {
+      font-family: 'Doto', monospace;
+      font-size: clamp(5px, 1vw, 8px);
+      color: #222;
+      background: #111;
+      border: 1px solid #1e1e1e;
+      border-radius: 4px;
+      padding: clamp(5px, 1vw, 8px) clamp(8px, 1.5vw, 14px);
+      cursor: pointer;
+      letter-spacing: 0.05em;
+      transition: color 0.2s, border-color 0.2s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .btn-action:active {
+      color: #00DD44;
+      border-color: #00DD44;
+    }
+
+
+    /* ── Bouton config (pixel orange discret) ── */
+    #config-btn {
+      position: fixed;
+      bottom: 0; left: 0;
+      z-index: 10;
+      cursor: pointer;
+      opacity: 0.18;
+      transition: opacity 0.2s;
+    }
+    #config-btn:active { opacity: 1; }
+
+    /* ── Panel de configuration ── */
+    #config-panel {
+      position: fixed;
+      bottom: var(--footer-h, 72px);
+      left: 0; right: 0;
+      z-index: 9;
+      background: rgba(5,5,5,0.97);
+      border-top: 1px solid #1a1a1a;
+      padding: clamp(14px,3vw,24px) clamp(16px,4vw,32px);
+      display: none;
+      flex-direction: column;
+      gap: clamp(12px,2.5vw,20px);
+      backdrop-filter: blur(8px);
+    }
+    #config-panel.open { display: flex; }
+
+    .cfg-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .cfg-label {
+      font-family: 'Doto', monospace;
+      font-size: clamp(8px,1.8vw,14px);
+      letter-spacing: 0.08em;
+      color: #333;
+    }
+    .cfg-toggle {
+      display: flex;
+      gap: 4px;
+    }
+    .cfg-btn {
+      font-family: 'Doto', monospace;
+      font-size: clamp(7px,1.5vw,12px);
+      padding: clamp(4px,1vw,7px) clamp(8px,1.5vw,14px);
+      background: #0e0e0e;
+      border: 1px solid #1e1e1e;
+      border-radius: 3px;
+      color: #2a2a2a;
+      cursor: pointer;
+      letter-spacing: 0.06em;
+      transition: color 0.15s, border-color 0.15s, background 0.15s;
+    }
+    .cfg-btn.on {
+      color: #00DD44;
+      border-color: #00DD44;
+      background: #001a08;
+    }
+    .cfg-btn.theme-color.on {
+      color: #FFD60A;
+      border-color: #FFD60A;
+      background: #1a1400;
+    }
+
+    /* ── Flash de refresh — pixel LED ── */
+    #refresh-dot {
+      position: fixed;
+      top: 0; left: 0;
+      opacity: 0;
+      transition: opacity 0.15s ease;
+      pointer-events: none;
+      z-index: 2;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Grille LED plein écran (fond) -->
+  <canvas id="led-bg"></canvas>
+
+  <!-- Masque : zone centrale sans pixels pour les écrans de chargement/erreur -->
+  <div id="content-mask"></div>
+
+  <!-- Chargement -->
+  <div id="screen-loading" class="screen">
+    <canvas id="loading-canvas"></canvas>
+    <div id="loading-text">CONNEXION...</div>
+  </div>
+
+  <!-- Erreur -->
+  <div id="screen-error" class="screen" style="display:none">
+    <div id="error-icon">⚠</div>
+    <div id="error-title">TRANSMETTEUR<br>HORS LIGNE</div>
+    <div id="error-sub">localhost:3000</div>
+    <div id="retry-text">RETRY 30s...</div>
+  </div>
+
+  <!-- Affichage principal -->
+  <div id="screen-main" class="screen" style="display:none">
+    <canvas id="led-value"></canvas>
+    <canvas id="led-extra" style="display:none;image-rendering:pixelated;margin-top:0"></canvas>
+    <div id="mmol-value" style="display:none">-- mmol/L</div>
+  </div>
+
+  <!-- Footer -->
+  <div id="footer">
+
+    <!-- Centre : infos (temps depuis mesure + vie capteur) -->
+    <div id="footer-info">
+      <div style="display:flex;align-items:center;gap:20px;">
+        <div class="dot dot-green" id="status-dot"></div>
+        <div class="footer-label" id="footer-time"></div>
+        <div class="footer-label" id="footer-sensor" style="color:#1e1e1e;font-size:clamp(9px,1.8vw,15px)"></div>
+      </div>
+    </div>
+
+    <!-- Droite : delta + boutons d'action -->
+    <div id="footer-actions">
+      <div class="footer-label" id="footer-delta"></div>
+      <!-- <button class="btn-action">ACTION</button> -->
+    </div>
+
+  </div>
+
+  <!-- Bouton config pixel orange -->
+  <div id="config-btn"></div>
+
+  <!-- Panel de configuration -->
+  <div id="config-panel">
+    <div class="cfg-row">
+      <span class="cfg-label">PRÉDICTION</span>
+      <div class="cfg-toggle">
+        <button class="cfg-btn" id="btn-pred-off" onclick="setCfg('prediction',false)">OFF</button>
+        <button class="cfg-btn" id="btn-pred-on"  onclick="setCfg('prediction',true)">ON</button>
+      </div>
+    </div>
+    <div class="cfg-row">
+      <span class="cfg-label">DELTA</span>
+      <div class="cfg-toggle">
+        <button class="cfg-btn" id="btn-delta-off" onclick="setCfg('delta',false)">OFF</button>
+        <button class="cfg-btn" id="btn-delta-on"  onclick="setCfg('delta',true)">ON</button>
+      </div>
+    </div>
+    <div class="cfg-row">
+      <span class="cfg-label">THÈME</span>
+      <div class="cfg-toggle">
+        <button class="cfg-btn" id="btn-theme-dark"  onclick="setCfg('theme','dark')">SOMBRE</button>
+        <button class="cfg-btn theme-color" id="btn-theme-color" onclick="setCfg('theme','color')">COLORÉ</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Flash de refresh -->
+  <div id="refresh-dot"></div>
+
+  <script>
+    // ── PWA manifest ──
+    (() => {
+      const m = {
+        name: 'Glucose Monitor', short_name: 'Glucose',
+        display: 'fullscreen',
+        background_color: '#000000', theme_color: '#000000',
+        icons: [],
+      };
+      const blob = new Blob([JSON.stringify(m)], { type: 'application/json' });
+      document.getElementById('pwa-manifest').href = URL.createObjectURL(blob);
+    })();
+
+    // ── Config ──
+    const POLL_MS   = 60_000;
+    const RETRY_MS  = 30_000;
+    const FOOTER_H  = 72;
+    document.documentElement.style.setProperty('--footer-h', FOOTER_H + 'px');
+
+    // ── Source ntfy : topic via ?topic=… (défaut : neaj-glyconnect-data) ──
+    const NTFY_HOST = 'ntfy.sh';
+    const NTFY_TOPIC = new URLSearchParams(location.search).get('topic') || 'neaj-glyconnect-data';
+    const NTFY_HTTPS = `https://${NTFY_HOST}/${NTFY_TOPIC}`;
+    const NTFY_WSS   = `wss://${NTFY_HOST}/${NTFY_TOPIC}/ws`;
+
+    // ── Calcul flèche tendance (port direct depuis src/ble/glucose.js) ──
+    function rateToTrend(raw) {
+      if (raw === 0x7f) return { arrow: '?', label: 'Indéterminé' };
+      const rate = raw > 127 ? raw - 256 : raw;  // raw est byte non signé
+      if (rate > 30)   return { arrow: '↑↑', label: 'Montée rapide' };
+      if (rate > 20)   return { arrow: '↑',  label: 'Montée' };
+      if (rate > 10)   return { arrow: '↗',  label: 'Légère montée' };
+      if (rate >= -10) return { arrow: '→',  label: 'Stable' };
+      if (rate > -20)  return { arrow: '↘',  label: 'Légère baisse' };
+      if (rate > -30)  return { arrow: '↓',  label: 'Baisse' };
+      return                 { arrow: '↓↓', label: 'Baisse rapide' };
+    }
+    function getZone(mgdl) {
+      if (mgdl < 54)   return { label: 'Hypoglycémie sévère', color: 'red' };
+      if (mgdl < 70)   return { label: 'Hypoglycémie',        color: 'yellow' };
+      if (mgdl <= 180) return { label: 'Dans la cible',       color: 'green' };
+      if (mgdl <= 250) return { label: 'Hyperglycémie',       color: 'yellow' };
+      return                  { label: 'Hyperglycémie sévère', color: 'red' };
+    }
+
+    // Convertit un message ntfy { event, time, message } en entry compatible avec render()
+    function ntfyMsgToEntry(msg) {
+      if (!msg || msg.event !== 'message' || !msg.message) return null;
+      let p; try { p = JSON.parse(msg.message); } catch { return null; }
+      if (typeof p.mgdl !== 'number') return null;
+      const trendSigned = typeof p.trend === 'number' ? p.trend : 0;
+      const trendRaw    = trendSigned < 0 ? trendSigned + 256 : trendSigned;
+      const trend       = rateToTrend(trendRaw);
+      const zone        = getZone(p.mgdl);
+      const sensorOk    = p.sensorOk !== false;
+      const receivedAt  = msg.time ? msg.time * 1000 : Date.now();
+      return {
+        value:      p.mgdl,
+        mmol:       typeof p.mmol === 'number' ? p.mmol : p.mgdl / 18.018,
+        trend:      trendSigned,
+        direction:  trend.arrow,
+        label:      trend.label,
+        timestamp:  receivedAt,
+        minutesAgo: Math.round((Date.now() - receivedAt) / 60000),
+        zone:       zone.label,
+        zoneColor:  zone.color,
+        sensorOk,
+        predicted:  false,
+      };
+    }
+
+    // ── Animation loader pixel ──
+    let loaderFrame = null;
+    let loaderT     = 0;
+
+    function drawLoader() {
+      const canvas = document.getElementById('loading-canvas');
+      if (!canvas) return;
+      const ps  = Math.min(32, Math.floor(window.innerWidth * 0.5 / 16));
+      const N   = 5;
+      const dpr = window.devicePixelRatio || 1;
+      const gap = Math.max(2, Math.round(ps * 0.15));
+      const led = ps - gap;
+      const r   = Math.max(1, Math.round(led * 0.2));
+      const W   = N * ps;
+      const H   = ps;
+
+      canvas.width        = W * dpr;
+      canvas.height       = H * dpr;
+      canvas.style.width  = W + 'px';
+      canvas.style.height = H + 'px';
+
+      const ctx = canvas.getContext('2d');
+      ctx.scale(dpr, dpr);
+      ctx.clearRect(0, 0, W, H);
+
+      // Position via sinus → mouvement doux, sans rebond brusque
+      const pos = (N - 1) / 2 * (1 + Math.sin(loaderT));
+
+      for (let i = 0; i < N; i++) {
+        const dist = Math.abs(i - pos);
+        // Dégradé doux sur 2 pixels, intensité modérée
+        const lit  = Math.max(0, 1 - dist / 1.8);
+        const eased = lit * lit; // adoucit les bords
+
+        ctx.shadowBlur  = eased > 0.3 ? Math.round(ps * 0.3) : 0;
+        ctx.shadowColor = 'rgba(0,221,68,0.6)';
+        ctx.fillStyle   = eased > 0.02
+          ? `rgba(0, 221, 68, ${0.12 + eased * 0.55})`
+          : '#181818';
+
+        ctx.beginPath();
+        ctx.roundRect(i * ps + gap / 2, gap / 2, led, led, r);
+        ctx.fill();
+      }
+      ctx.shadowBlur = 0;
+
+      loaderT += 0.022; // vitesse lente
+      loaderFrame = requestAnimationFrame(drawLoader);
+    }
+
+    function startLoader() {
+      if (!loaderFrame) drawLoader();
+    }
+
+    function stopLoader() {
+      if (loaderFrame) { cancelAnimationFrame(loaderFrame); loaderFrame = null; }
+    }
+
+    // ── Police pixel 5×7 (LED Matrix) ──
+    const GLYPH = {
+      // Chiffres
+      '0': [[0,1,1,1,0],[1,0,0,0,1],[1,0,0,1,1],[1,0,1,0,1],[1,1,0,0,1],[1,0,0,0,1],[0,1,1,1,0]],
+      '1': [[0,0,1,0,0],[0,1,1,0,0],[0,0,1,0,0],[0,0,1,0,0],[0,0,1,0,0],[0,0,1,0,0],[0,1,1,1,0]],
+      '2': [[0,1,1,1,0],[1,0,0,0,1],[0,0,0,0,1],[0,0,0,1,0],[0,0,1,0,0],[0,1,0,0,0],[1,1,1,1,1]],
+      '3': [[1,1,1,1,0],[0,0,0,0,1],[0,0,0,0,1],[0,1,1,1,0],[0,0,0,0,1],[0,0,0,0,1],[1,1,1,1,0]],
+      '4': [[0,0,0,1,0],[0,0,1,1,0],[0,1,0,1,0],[1,0,0,1,0],[1,1,1,1,1],[0,0,0,1,0],[0,0,0,1,0]],
+      '5': [[1,1,1,1,1],[1,0,0,0,0],[1,0,0,0,0],[1,1,1,1,0],[0,0,0,0,1],[0,0,0,0,1],[1,1,1,1,0]],
+      '6': [[0,0,1,1,0],[0,1,0,0,0],[1,0,0,0,0],[1,1,1,1,0],[1,0,0,0,1],[1,0,0,0,1],[0,1,1,1,0]],
+      '7': [[1,1,1,1,1],[0,0,0,0,1],[0,0,0,1,0],[0,0,1,0,0],[0,0,1,0,0],[0,0,1,0,0],[0,0,1,0,0]],
+      '8': [[0,1,1,1,0],[1,0,0,0,1],[1,0,0,0,1],[0,1,1,1,0],[1,0,0,0,1],[1,0,0,0,1],[0,1,1,1,0]],
+      '9': [[0,1,1,1,0],[1,0,0,0,1],[1,0,0,0,1],[0,1,1,1,1],[0,0,0,0,1],[0,0,0,0,1],[0,1,1,1,0]],
+      '-': [[0,0,0,0,0],[0,0,0,0,0],[0,0,0,0,0],[1,1,1,1,1],[0,0,0,0,0],[0,0,0,0,0],[0,0,0,0,0]],
+      '?': [[0,1,1,1,0],[1,0,0,0,1],[0,0,0,0,1],[0,0,0,1,0],[0,0,1,0,0],[0,0,0,0,0],[0,0,1,0,0]],
+      '+': [[0,0,1,0,0],[0,0,1,0,0],[1,1,1,1,1],[0,0,1,0,0],[0,0,1,0,0],[0,0,0,0,0],[0,0,0,0,0]],
+
+      // ── Flèches LED 5×7 — style matriciel classique ──
+
+      // ↑  SingleUp : tête triangulaire pleine + tige
+      'up':  [
+        [0,0,1,0,0],
+        [0,1,1,1,0],
+        [1,0,1,0,1],
+        [0,0,1,0,0],
+        [0,0,1,0,0],
+        [0,0,1,0,0],
+        [0,0,0,0,0],
+      ],
+
+      // ↑↑  DoubleUp : deux triangles pleins empilés
+      'dup': [
+        [0,0,1,0,0],
+        [0,1,1,1,0],
+        [1,1,1,1,1],
+        [0,0,1,0,0],
+        [0,1,1,1,0],
+        [1,1,1,1,1],
+        [0,0,0,0,0],
+      ],
+
+      // ↗  FortyFiveUp : diagonale + tête en coin haut-droit
+      'fup': [
+
+        [0,0,1,1,1,1],
+        [0,0,0,0,1,1],
+        [0,0,0,1,0,1],
+        [0,0,1,0,0,1],
+        [0,1,0,0,0,0],
+        [1,0,0,0,0,0],
+        [0,0,0,0,0,0],
+      ],
+
+      // →  Flat : tige horizontale + tête en chevron
+      'flat': [
+        [0,0,0,0,0,0,0],
+        [0,0,0,0,1,0,0],
+        [0,0,0,0,0,1,0],
+        [0,1,1,1,1,1,1],
+        [0,0,0,0,0,1,0],
+        [0,0,0,0,1,0,0],
+        [0,0,0,0,0,0,0],
+        [0,0,0,0,0,0,0],
+      ],
+
+      // ↘  FortyFiveDown : diagonale + tête en coin bas-droit
+      'fdn': [
+        [1,0,0,0,0,0],
+        [0,1,0,0,0,0],
+        [0,0,1,0,0,1],
+        [0,0,0,1,0,1],
+        [0,0,0,0,1,1],
+        [0,0,1,1,1,1],
+        [0,0,0,0,0,0],
+
+      ],
+
+      // ↓  SingleDown : tige + tête triangulaire pleine
+      'dn':  [
+        [0,0,1,0,0],
+        [0,0,1,0,0],
+        [0,0,1,0,0],
+        [1,0,1,0,1],
+        [0,1,1,1,0],
+        [0,0,1,0,0],
+        [0,0,0,0,0],
+      ],
+
+      // ↓↓  DoubleDown : deux triangles pleins empilés vers le bas
+      'ddn': [
+        [1,1,1,1,1],
+        [0,1,1,1,0],
+        [0,0,1,0,0],
+        [1,1,1,1,1],
+        [0,1,1,1,0],
+        [0,0,1,0,0],
+        [0,0,0,0,0],
+      ],
+    };
+
+    // Mapping depuis nos flèches (→ ↑ etc.) ET format Nightscout (Flat, SingleUp…)
+    const DIRECTIONS = {
+      'DoubleUp':          'dup',
+      'SingleUp':          'up',
+      'FortyFiveUp':       'fup',
+      'Flat':              'flat',
+      'FortyFiveDown':     'fdn',
+      'SingleDown':        'dn',
+      'DoubleDown':        'ddn',
+      'NOT COMPUTABLE':    '?',
+      'RATE OUT OF RANGE': '?',
+      '↑↑': 'dup',
+      '↑':  'up',
+      '↗':  'fup',
+      '→':  'flat',
+      '↘':  'fdn',
+      '↓':  'dn',
+      '↓↓': 'ddn',
+      '?':  '?',
+    };
+
+    // ── Moteur de rendu LED Canvas ──
+    // Dessine un tableau de glyphes sur un canvas à la taille ps (pitch par LED)
+    function drawLEDCanvas(canvasId, keys, colors, ps) {
+      const canvas = document.getElementById(canvasId);
+      if (!canvas) return;
+      const dpr  = window.devicePixelRatio || 1;
+      const CH = 7, CGAP = 1;
+
+      // Largeur réelle de chaque glyphe (variable)
+      const widths    = keys.map(k => GLYPH[k]?.[0]?.length ?? 5);
+      const totalCols = widths.reduce((s, w) => s + w, 0) + (keys.length - 1) * CGAP;
+      const totalRows = CH;
+
+      const gap = Math.max(2, Math.round(ps * 0.15));
+      const led = ps - gap;
+      const r   = Math.max(1, Math.round(led * 0.2));
+
+      const cW = totalCols * ps;
+      const cH = totalRows * ps;
+
+      canvas.width        = cW * dpr;
+      canvas.height       = cH * dpr;
+      canvas.style.width  = cW + 'px';
+      canvas.style.height = cH + 'px';
+
+      const ctx = canvas.getContext('2d');
+      ctx.scale(dpr, dpr);
+      ctx.clearRect(0, 0, cW, cH);
+
+      let col0 = 0;
+      keys.forEach((key, ci) => {
+        const bitmap = GLYPH[key];
+        const gW     = widths[ci];
+        const color  = colors[ci];
+
+        if (bitmap) {
+          for (let row = 0; row < CH; row++) {
+            for (let col = 0; col < gW; col++) {
+              const isOn = bitmap[row][col] === 1;
+              const x = (col0 + col) * ps + gap / 2;
+              const y = row * ps + gap / 2;
+
+              // Halo de lumière sur les LEDs allumées
+              ctx.shadowBlur  = isOn ? Math.round(ps * 0.55) : 0;
+              ctx.shadowColor = isOn ? color : 'transparent';
+              ctx.fillStyle   = isOn ? color : '#191919';
+
+              ctx.beginPath();
+              ctx.roundRect(x, y, led, led, r);
+              ctx.fill();
+            }
+          }
+        }
+        col0 += gW + CGAP;
+      });
+      ctx.shadowBlur = 0;
+    }
+
+    // Origine effective de la grille — utilisée pour snapper le pixel de refresh
+    let gridOx = 0, gridOy = 0;
+
+    // Dessine la grille de pixels "éteints" sur tout l'écran (hors footer)
+    function drawBgGrid(ps, originX = 0, originY = 0) {
+      const canvas = document.getElementById('led-bg');
+      if (!canvas) return;
+      const dpr = window.devicePixelRatio || 1;
+      const W   = window.innerWidth;
+      const H   = window.innerHeight - FOOTER_H;
+
+      canvas.width        = W * dpr;
+      canvas.height       = H * dpr;
+      canvas.style.width  = W + 'px';
+      canvas.style.height = H + 'px';
+
+      const ctx = canvas.getContext('2d');
+      ctx.scale(dpr, dpr);
+      ctx.clearRect(0, 0, W, H);
+
+      const gap = Math.max(2, Math.round(ps * 0.15));
+      const led = ps - gap;
+      const r   = Math.max(1, Math.round(led * 0.2));
+
+      ctx.fillStyle = '#181818';
+
+      const ox = ((originX % ps) + ps) % ps;
+      const oy = ((originY % ps) + ps) % ps;
+      gridOx = ox; gridOy = oy; // mémorise pour le snap du pixel de refresh
+
+      const cols = Math.ceil(W / ps) + 2;
+      const rows = Math.ceil(H / ps) + 2;
+
+      for (let row = -1; row < rows; row++) {
+        for (let col = -1; col < cols; col++) {
+          const x = ox + col * ps + gap / 2;
+          const y = oy + row * ps + gap / 2;
+          if (x < 0 || x + led > W || y < 0 || y + led > H) continue;
+          ctx.beginPath();
+          ctx.roundRect(x, y, led, led, r);
+          ctx.fill();
+        }
+      }
+    }
+
+    // Largeur totale en colonnes d'une liste de clés de glyphes
+    function glyphCols(keys) {
+      const widths = keys.map(k => GLYPH[k]?.[0]?.length ?? 5);
+      return widths.reduce((s, w) => s + w, 0) + (keys.length - 1);
+    }
+
+    // Référence : cas le plus large = 3 chiffres + flèche flat (7 cols)
+    // ps et largeur du canvas FIXES — jamais recalculés entre les lectures
+    const REF_KEYS = ['0', '0', '0', 'flat'];
+    let FIXED_PS   = Math.min(32, Math.floor(window.innerWidth * 0.92 / (glyphCols(REF_KEYS) + 1)));
+    let REF_COLS   = glyphCols(REF_KEYS) + 1; // +1 colonne entre chiffres et flèche
+    let bgDrawn    = false; // fond aligné une seule fois après le premier rendu
+
+    function drawLEDDisplay(digits, digitColor, arrowKey, arrowColor) {
+      // arrowKey null → pas de flèche (ex: état erreur capteur)
+      const allKeys     = arrowKey ? [...digits, arrowKey] : [...digits];
+      const allColors   = arrowKey
+        ? [...digits.map(() => digitColor), arrowColor]
+        : digits.map(() => digitColor);
+      const contentCols = arrowKey
+        ? glyphCols(allKeys) + 1  // +1 colonne entre chiffres et flèche
+        : glyphCols(allKeys);
+
+      const canvas = document.getElementById('led-value');
+      const dpr    = window.devicePixelRatio || 1;
+      const CH = 7, CGAP = 1;
+
+      const gap = Math.max(2, Math.round(FIXED_PS * 0.15));
+      const led = FIXED_PS - gap;
+      const r   = Math.max(1, Math.round(led * 0.2));
+
+      // Canvas toujours à la même largeur (REF_COLS) — position fixe sur l'écran
+      const cW = REF_COLS * FIXED_PS;
+      const cH = CH * FIXED_PS;
+      canvas.width        = cW * dpr;
+      canvas.height       = cH * dpr;
+      canvas.style.width  = cW + 'px';
+      canvas.style.height = cH + 'px';
+
+      const ctx = canvas.getContext('2d');
+      ctx.scale(dpr, dpr);
+      ctx.clearRect(0, 0, cW, cH);
+
+      // Pixels "éteints" sur toute la largeur fixe (fond du canvas)
+      ctx.fillStyle = '#191919';
+      ctx.shadowBlur = 0;
+      for (let row = 0; row < CH; row++) {
+        for (let col = 0; col < REF_COLS; col++) {
+          const x = col * FIXED_PS + gap / 2;
+          const y = row * FIXED_PS + gap / 2;
+          ctx.beginPath();
+          ctx.roundRect(x, y, led, led, r);
+          ctx.fill();
+        }
+      }
+
+      // Contenu centré horizontalement dans le canvas fixe
+      const widths   = allKeys.map(k => GLYPH[k]?.[0]?.length ?? 5);
+      const startCol = Math.floor((REF_COLS - contentCols) / 2);
+      let col0 = startCol;
+
+      const arrowIdx = arrowKey ? allKeys.length - 1 : -1; // -1 si pas de flèche
+      allKeys.forEach((key, ci) => {
+        // Colonne supplémentaire avant la flèche (seulement s'il y en a une)
+        if (arrowIdx >= 0 && ci === arrowIdx) col0 += 1;
+
+        const bitmap = GLYPH[key];
+        const gW     = widths[ci];
+        const color  = allColors[ci];
+        if (bitmap) {
+          for (let row = 0; row < CH; row++) {
+            for (let col = 0; col < gW; col++) {
+              const isOn = bitmap[row]?.[col] === 1;
+              if (!isOn) { col0; continue; }
+              const x = (col0 + col) * FIXED_PS + gap / 2;
+              const y = row * FIXED_PS + gap / 2;
+              ctx.shadowBlur  = Math.round(FIXED_PS * 0.55);
+              ctx.shadowColor = color;
+              ctx.fillStyle   = color;
+              ctx.beginPath();
+              ctx.roundRect(x, y, led, led, r);
+              ctx.fill();
+            }
+          }
+        }
+        col0 += gW + CGAP;
+      });
+      ctx.shadowBlur = 0;
+
+      // Aligner le fond sur le canvas UNE SEULE FOIS (position fixe car canvas fixe)
+      if (!bgDrawn) {
+        requestAnimationFrame(() => {
+          const rect = document.getElementById('led-value').getBoundingClientRect();
+          drawBgGrid(FIXED_PS, rect.left, rect.top);
+          bgDrawn = true;
+        });
+      }
+    }
+
+    // ── Configuration (localStorage) ──
+    const CFG_KEY = 'glucoseCfg';
+    let cfg = { prediction: false, delta: false, theme: 'dark' };
+    try { Object.assign(cfg, JSON.parse(localStorage.getItem(CFG_KEY) || '{}')); } catch(_) {}
+
+    function saveCfg() { try { localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); } catch(_) {} }
+
+    function setCfg(key, val) {
+      cfg[key] = val;
+      saveCfg();
+      updateCfgUI();
+      if (lastEntry) render(lastEntry);
+    }
+
+    function updateCfgUI() {
+      document.getElementById('btn-pred-off').classList.toggle('on', !cfg.prediction);
+      document.getElementById('btn-pred-on').classList.toggle('on',  cfg.prediction);
+      document.getElementById('btn-delta-off').classList.toggle('on', !cfg.delta);
+      document.getElementById('btn-delta-on').classList.toggle('on',  cfg.delta);
+      document.getElementById('btn-theme-dark').classList.toggle('on',  cfg.theme === 'dark');
+      document.getElementById('btn-theme-color').classList.toggle('on', cfg.theme === 'color');
+    }
+
+    // ── Thèmes ──
+    const ZONE_BG_COLOR = { green: '#001f0a', yellow: '#1a1500', orange: '#1a0900', red: '#1a0000' };
+
+    function getDigitColor(sgv, isStale) {
+      if (isStale) return '#2a2a2a';
+      return cfg.theme === 'color' ? '#ffffff' : zoneColor(sgv);
+    }
+    function getArrowColor(sgv, isStale) {
+      if (isStale) return '#2a2a2a';
+      return cfg.theme === 'color' ? 'rgba(255,255,255,0.45)' : '#7788CC';
+    }
+    function getExtraColor(isStale) {
+      if (isStale) return '#2a2a2a';
+      return cfg.theme === 'color' ? 'rgba(255,255,255,0.6)' : '#446644';
+    }
+    function applyThemeBg(sgv, isStale) {
+      const bg = isStale ? '#050505'
+        : cfg.theme === 'color' ? ZONE_BG_COLOR[zone(sgv)]
+        : '#050505';
+      document.body.style.backgroundColor = bg;
+    }
+
+    // ── Canvas secondaire (prédiction / delta) ──
+    function drawExtraCanvas(keys, colors) {
+      const canvas = document.getElementById('led-extra');
+      if (!canvas) return;
+      if (!keys.length) { canvas.style.display = 'none'; return; }
+
+      const ps  = Math.max(6, Math.floor(FIXED_PS * 0.58));
+      const dpr = window.devicePixelRatio || 1;
+      const CH  = 7, CGAP = 1;
+      const widths    = keys.map(k => GLYPH[k]?.[0]?.length ?? 5);
+      const totalCols = widths.reduce((s,w) => s+w, 0) + (keys.length-1) * CGAP;
+      const gap = Math.max(1, Math.round(ps * 0.15));
+      const led = ps - gap;
+      const r   = Math.max(1, Math.round(led * 0.2));
+      const cW  = totalCols * ps;
+      const cH  = CH * ps;
+
+      canvas.width        = cW * dpr;
+      canvas.height       = cH * dpr;
+      canvas.style.width  = cW + 'px';
+      canvas.style.height = cH + 'px';
+      canvas.style.display = 'block';
+
+      const ctx = canvas.getContext('2d');
+      ctx.scale(dpr, dpr);
+      ctx.clearRect(0, 0, cW, cH);
+
+      let col0 = 0;
+      keys.forEach((key, ci) => {
+        const bitmap = GLYPH[key];
+        const gW     = widths[ci];
+        const color  = colors[ci];
+        if (bitmap) {
+          for (let row = 0; row < CH; row++) {
+            for (let col = 0; col < gW; col++) {
+              const isOn = bitmap[row]?.[col] === 1;
+              const x = (col0 + col) * ps + gap / 2;
+              const y = row * ps + gap / 2;
+              ctx.shadowBlur  = isOn ? Math.round(ps * 0.5) : 0;
+              ctx.shadowColor = isOn ? color : 'transparent';
+              ctx.fillStyle   = isOn ? color : '#181818';
+              ctx.beginPath();
+              ctx.roundRect(x, y, led, led, r);
+              ctx.fill();
+            }
+          }
+        }
+        col0 += gW + CGAP;
+      });
+      ctx.shadowBlur = 0;
+    }
+
+    // ── Bouton config pixel orange ──
+    function initConfigBtn() {
+      const btn   = document.getElementById('config-btn');
+      const panel = document.getElementById('config-panel');
+      const gap   = Math.max(2, Math.round(FIXED_PS * 0.15));
+      const led   = FIXED_PS - gap;
+      const r     = Math.max(1, Math.round(led * 0.2));
+
+      btn.style.width        = led + 'px';
+      btn.style.height       = led + 'px';
+      btn.style.borderRadius = r + 'px';
+      btn.style.background   = '#FF9500';
+      btn.style.boxShadow    = `0 0 ${Math.round(led * 0.5)}px rgba(255,149,0,0.8)`;
+      // Centré verticalement dans le footer, calé à gauche
+      btn.style.left         = (gap + 4) + 'px';
+      btn.style.bottom       = Math.round((FOOTER_H - led) / 2) + 'px';
+
+      btn.onclick = (e) => { e.stopPropagation(); panel.classList.toggle('open'); };
+      document.addEventListener('click', (e) => {
+        if (!panel.contains(e.target) && e.target !== btn) panel.classList.remove('open');
+      });
+    }
+
+    // ── État ──
+    let prevSgv   = null;
+    let lastDate  = null; // timestamp de la dernière lecture rendue
+    let lastEntry = null;
+    let wakeLock  = null;
+    let pollTimer = null;
+    let cntdwnInt = null;
+    let wsRetries = 0;
+
+    // ── WakeLock ──
+    async function acquireWakeLock() {
+      if (!('wakeLock' in navigator)) return;
+      try { wakeLock = await navigator.wakeLock.request('screen'); } catch (_) {}
+    }
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') acquireWakeLock();
+    });
+
+    // ── Utils ──
+    const toMmol = sgv => (sgv / 18.0182).toFixed(1);
+
+    // ── Zones de gravité glycémique ──
+    function zone(sgv) {
+      if (sgv < 54  || sgv > 350) return 'red';
+      if (sgv < 70  || sgv > 250) return 'orange';
+      if (sgv < 80  || sgv > 180) return 'yellow';
+      return 'green';
+    }
+
+    const ZONE_COLOR = {
+      green:  '#00DD44',
+      yellow: '#FFD60A',
+      orange: '#FF9500',
+      red:    '#FF3B30',
+    };
+    const ZONE_BG = {
+      green:  '#070707',
+      yellow: '#090800',
+      orange: '#080400',
+      red:    '#0d0000',
+    };
+    const ZONE_MMOL = {
+      green:  '#0d4020',
+      yellow: '#3d3300',
+      orange: '#5c3000',
+      red:    '#5c1d1d',
+    };
+
+    function zoneColor(sgv) { return ZONE_COLOR[zone(sgv)]; }
+    function zoneBg(sgv)    { return ZONE_BG[zone(sgv)]; }
+    function zoneMmol(sgv)  { return ZONE_MMOL[zone(sgv)]; }
+
+    function timeSince(ts) {
+      const m = Math.floor((Date.now() - ts) / 60000);
+      if (m < 1) return 'IL Y A < 1 MIN';
+      return 'IL Y A ' + m + ' MIN';
+    }
+
+    // ── Masque centré snappé sur la grille ──
+    function updateMask(visible) {
+      const mask = document.getElementById('content-mask');
+      if (!visible) { mask.style.display = 'none'; return; }
+
+      const areaH  = window.innerHeight - FOOTER_H;
+      // Taille cible ~55% largeur, ~45% hauteur, arrondis au multiple de FIXED_PS
+      const cols = Math.round(window.innerWidth * 0.55 / FIXED_PS);
+      const rows = Math.round(areaH          * 0.45 / FIXED_PS);
+      const w    = cols * FIXED_PS;
+      const h    = rows * FIXED_PS;
+
+      // Snap sur la grille : aligner le coin haut-gauche du masque sur un pixel
+      const rawX  = (window.innerWidth - w) / 2;
+      const rawY  = (areaH - h) / 2;
+      const snapX = gridOx + Math.round((rawX - gridOx) / FIXED_PS) * FIXED_PS;
+      const snapY = gridOy + Math.round((rawY - gridOy) / FIXED_PS) * FIXED_PS;
+
+      mask.style.display = 'block';
+      mask.style.left    = snapX + 'px';
+      mask.style.top     = snapY + 'px';
+      mask.style.width   = w + 'px';
+      mask.style.height  = h + 'px';
+    }
+
+    // ── Écrans ──
+    function show(name) {
+      ['loading', 'error', 'main'].forEach(s => {
+        document.getElementById('screen-' + s).style.display =
+          s === name ? 'flex' : 'none';
+      });
+      updateMask(name !== 'main');
+      name === 'loading' ? startLoader() : stopLoader();
+    }
+
+    // ── Adaptateur : notre format → format render() ──
+    // Notre API : { value, mmol, direction, timestamp }
+    // render() attend : { sgv, date, direction }
+    function toRenderEntry(data) {
+      return {
+        sgv:       data.value ?? data.sgv,
+        date:      data.timestamp ?? data.date,
+        direction: data.direction,
+        predicted: data.predicted ?? null,
+        sensorOk:  data.sensorOk !== false, // true par défaut si absent
+      };
+    }
+
+    // ── Rendu des données ──
+    function render(entry) {
+      lastEntry = entry;
+      const { sgv, date, direction, predicted, sensorOk } = entry;
+      const minsOld = Math.floor((Date.now() - date) / 60000);
+      const isStale = minsOld > 15;
+
+      applyThemeBg(sgv, isStale);
+
+      if (!sensorOk) {
+        // Capteur hors du corps ou état non nominal → "--" rouge
+        drawLEDDisplay(['-', '-'], '#FF3B30', null, null);
+        drawExtraCanvas([], []);
+        document.getElementById('footer-time').textContent  = 'ERREUR CAPTEUR';
+        document.getElementById('footer-time').style.color  = '#3d1010';
+        document.getElementById('footer-delta').textContent = '';
+        const dot = document.getElementById('status-dot');
+        dot.className = 'dot dot-red';
+        show('main');
+        return;
+      }
+
+      const color      = getDigitColor(sgv, isStale);
+      const arrowKey   = DIRECTIONS[direction] || 'flat';
+      const arrowColor = getArrowColor(sgv, isStale);
+      const digits     = String(sgv).split('');
+      drawLEDDisplay(digits, color, arrowKey, arrowColor);
+
+      // Canvas secondaire : prédiction ou delta
+      const extraColor = getExtraColor(isStale);
+      const extraKeys  = [];
+      const extraClrs  = [];
+      if (cfg.prediction && predicted != null) {
+        String(Math.round(predicted)).split('').forEach(d => { extraKeys.push(d); extraClrs.push(extraColor); });
+      }
+      if (cfg.delta && prevSgv !== null) {
+        const d    = sgv - prevSgv;
+        const sign = d >= 0 ? '+' : '-';
+        [sign, ...String(Math.abs(d)).split('')].forEach(k => { extraKeys.push(k); extraClrs.push(extraColor); });
+      }
+      drawExtraCanvas(extraKeys, extraClrs);
+
+      const $mmol = document.getElementById('mmol-value');
+      $mmol.textContent = toMmol(sgv) + ' MMOL/L';
+      $mmol.style.color = isStale ? '#222' : zoneMmol(sgv);
+
+      const $delta = document.getElementById('footer-delta');
+      // Ne mettre à jour le delta que si c'est une nouvelle lecture (timestamp différent)
+      if (date !== lastDate) {
+        if (prevSgv !== null) {
+          const d = sgv - prevSgv;
+          $delta.textContent = (d >= 0 ? '+' : '') + d + ' MG/DL';
+          $delta.style.color = isStale ? '#1e1e1e' : (d >= 0 ? '#444' : '#555');
+        } else {
+          $delta.textContent = '';
+        }
+        prevSgv  = sgv;
+        lastDate = date;
+      }
+
+      const $time = document.getElementById('footer-time');
+      $time.textContent = timeSince(date);
+      $time.style.color = minsOld < 6 ? '#292929' : minsOld < 12 ? '#3d2800' : '#3d1000';
+
+      // Seuils calés sur le cycle G6 (5 min) : 0–6 vert, 6–12 orange, 12+ rouge
+      const dot = document.getElementById('status-dot');
+      dot.className = 'dot ' + (
+        minsOld < 6  ? 'dot-green' :
+        minsOld < 12 ? 'dot-orange' :
+                       'dot-red'
+      );
+
+      show('main');
+      flashDot();
+    }
+
+    // ── Vie restante capteur ──
+    function setSensorLife(seconds) {
+      const el = document.getElementById('footer-sensor');
+      if (!el) return;
+      if (seconds <= 0) {
+        el.textContent = 'EXPIRÉ';
+        el.style.color = '#FF3B30';
+        return;
+      }
+      const hours = Math.round(seconds / 3600);
+      const days  = Math.floor(seconds / 86400);
+      el.textContent = hours < 24 ? `${hours}H` : `${days}J`;
+      el.style.color  = days < 1 ? '#FF3B30' : days < 2 ? '#FF9500' : '#1e1e1e';
+    }
+
+    // ── Texte de chargement selon l'état BLE ──
+    const STATE_TEXT = {
+      scanning:       'CONNEXION...',
+      connecting:     'CONNEXION...',
+      authenticating: 'CONNEXION...',
+    };
+    function setLoadingText(state) {
+      const el = document.getElementById('loading-text');
+      if (el) el.innerHTML = STATE_TEXT[state] || 'CONNEXION<br>TRANSMETTEUR...';
+      // Si pas encore de données, afficher l'écran de chargement
+      if (!lastEntry) show('loading');
+    }
+
+    // ── Rendu erreur ──
+    function renderError() {
+      show('error');
+      startCountdown(RETRY_MS / 1000);
+    }
+
+    // ── Flash de refresh — pixel LED superposé à la grille ──
+    function flashDot() {
+      const el  = document.getElementById('refresh-dot');
+      const gap = Math.max(2, Math.round(FIXED_PS * 0.15));
+      const led = FIXED_PS - gap;
+      const r   = Math.max(1, Math.round(led * 0.2));
+
+      // Snap sur le pixel de grille le plus proche du coin haut-droit
+      const targetX = window.innerWidth  - 2 * FIXED_PS;
+      const targetY = FIXED_PS;
+      const col = Math.round((targetX - gap / 2 - gridOx) / FIXED_PS);
+      const row = Math.round((targetY - gap / 2 - gridOy) / FIXED_PS);
+      const px  = gridOx + col * FIXED_PS + gap / 2;
+      const py  = gridOy + row * FIXED_PS + gap / 2;
+
+      el.style.left         = px + 'px';
+      el.style.top          = py + 'px';
+      el.style.width        = led + 'px';
+      el.style.height       = led + 'px';
+      el.style.borderRadius = r + 'px';
+      el.style.background   = '#00DD44';
+      el.style.boxShadow    = `0 0 ${Math.round(FIXED_PS * 0.55)}px #00DD44`;
+      el.style.opacity = '1';
+      setTimeout(() => { el.style.opacity = '0'; }, 500);
+    }
+
+    // ── Countdown ──
+    function startCountdown(secs) {
+      if (cntdwnInt) clearInterval(cntdwnInt);
+      let s = secs;
+      const el = document.getElementById('retry-text');
+      const tick = () => { if (el) el.textContent = 'RETRY ' + s + 'S...'; };
+      tick();
+      cntdwnInt = setInterval(() => {
+        s--;
+        tick();
+        if (s <= 0) clearInterval(cntdwnInt);
+      }, 1000);
+    }
+
+    // ── REST polling ntfy (fallback WS + fetch initial) ──
+    async function fetchCurrent() {
+      if (pollTimer) clearTimeout(pollTimer);
+      try {
+        const res = await fetch(`${NTFY_HTTPS}/json?poll=1&since=24h`, { cache: 'no-store' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const text = await res.text();
+        const lines = text.trim().split('\n').filter(Boolean);
+        // Prend le dernier message valide (ntfy renvoie chronologique)
+        let entry = null;
+        for (let i = lines.length - 1; i >= 0; i--) {
+          try {
+            const e = ntfyMsgToEntry(JSON.parse(lines[i]));
+            if (e) { entry = e; break; }
+          } catch {}
+        }
+        if (!entry) throw new Error('no data');
+        render(toRenderEntry(entry));
+        pollTimer = setTimeout(fetchCurrent, POLL_MS);
+      } catch (err) {
+        console.warn('[glucose]', err.message);
+        if (lastEntry) renderError();
+        pollTimer = setTimeout(fetchCurrent, RETRY_MS);
+      }
+    }
+
+    // ── WebSocket ntfy (principal — push live à chaque nouvelle lecture) ──
+    function connectWS() {
+      const ws = new WebSocket(NTFY_WSS);
+
+      ws.addEventListener('open', () => {
+        wsRetries = 0;
+        clearTimeout(pollTimer);
+        fetchCurrent(); // lecture initiale (backfill)
+      });
+
+      ws.addEventListener('message', (evt) => {
+        try {
+          const msg = JSON.parse(evt.data);
+          // ntfy : event=open au handshake (à ignorer), event=message pour les data
+          if (msg.event !== 'message') return;
+          const entry = ntfyMsgToEntry(msg);
+          if (entry) render(toRenderEntry(entry));
+        } catch (_) {}
+      });
+
+      ws.addEventListener('close', () => {
+        fetchCurrent(); // fallback polling
+        const delay = Math.min(2 ** wsRetries * 2000, 60_000);
+        wsRetries++;
+        setTimeout(connectWS, delay);
+      });
+
+      ws.addEventListener('error', () => ws.close());
+    }
+
+    // ── Redimensionnement : recalcule FIXED_PS et réaligne le fond ──
+    window.addEventListener('resize', () => {
+      FIXED_PS = Math.min(32, Math.floor(window.innerWidth * 0.92 / (glyphCols(REF_KEYS) + 1)));
+      bgDrawn  = false; // force réalignement au prochain rendu
+      drawBgGrid(FIXED_PS);
+      if (lastEntry) render(lastEntry);
+      else updateMask(true);
+    });
+
+    // ── Démarrage ──
+    acquireWakeLock();
+    drawBgGrid(FIXED_PS);
+    updateMask(true);
+    startLoader();
+    updateCfgUI();
+    // Bouton config initialisé après le premier rendu de grille (gridOx/gridOy disponibles)
+    requestAnimationFrame(initConfigBtn);
+    connectWS();
+  </script>
+</body>
+</html>
