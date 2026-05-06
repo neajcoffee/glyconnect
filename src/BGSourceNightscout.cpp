@@ -4,6 +4,7 @@
 #include <Hash.h>
 #include <StreamUtils.h>
 
+#include "ServerManager.h"
 #include "SettingsManager.h"
 #include "globals.h"
 

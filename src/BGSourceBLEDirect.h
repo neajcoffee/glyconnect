@@ -10,7 +10,7 @@ class BGSourceBLEDirect : public BGSource {
 public:
     void push(const GlucoseReading& reading) {
         glucoseReadings.push_front(reading);
-        removeOldData(glucoseReadings);
+        glucoseReadings = deleteOldReadings(glucoseReadings, 0);
         firstConnectionSuccess = true;
         _hasNew = true;
     }

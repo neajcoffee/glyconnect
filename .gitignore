@@ -4,3 +4,10 @@
 .vscode/launch.json
 .vscode/ipch
 /log/*
+
+# Secrets — JAMAIS commiter (cf secrets.ini.example pour le template)
+secrets.ini
+
+# macOS
+.DS_Store
+**/.DS_Store

@@ -1,0 +1,1476 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Sprite editor — TC001</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #161b22;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --accent: #58a6ff;
+    --pixel-on: #ffffff;
+    --pixel-off: #1f242c;
+    --hover: #30363d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: var(--bg); color: var(--text);
+    display: grid; grid-template-columns: 1fr 1fr; gap: 24px;
+    min-height: 100vh;
+  }
+  h1 { font-size: 18px; margin: 0 0 12px; color: var(--accent); }
+  h2 { font-size: 14px; margin: 0 0 8px; color: var(--text); opacity: 0.85; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+  }
+  .controls {
+    display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; align-items: center;
+  }
+  .controls label { font-size: 12px; opacity: 0.7; }
+  .controls input[type="number"], .controls select, .controls input[type="text"] {
+    background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 4px 8px; font-family: inherit; font-size: 12px;
+    width: 60px;
+  }
+  .controls input[type="text"] { width: 200px; }
+  .controls button {
+    background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 4px 12px; font-family: inherit; font-size: 12px;
+    cursor: pointer;
+  }
+  .controls button:hover { background: var(--hover); border-color: var(--accent); }
+  .grid {
+    display: inline-grid; gap: 2px;
+    background: var(--border); padding: 2px; border-radius: 4px;
+    user-select: none;
+  }
+  .pixel {
+    width: 32px; height: 32px;
+    background: var(--pixel-off);
+    cursor: pointer; border-radius: 2px;
+    transition: background 0.05s;
+  }
+  .pixel.on { background: var(--pixel-on); }
+  .pixel:hover { outline: 1px solid var(--accent); }
+  .preview {
+    display: inline-grid; gap: 1px;
+    background: #000; padding: 4px; border-radius: 4px;
+    margin-top: 12px;
+  }
+  .preview .pixel { width: 6px; height: 6px; cursor: default; outline: none !important; }
+  .matrix-preview {
+    display: inline-grid; gap: 1px;
+    grid-template-columns: repeat(32, 8px);
+    grid-template-rows: repeat(8, 8px);
+    background: #000; padding: 4px; border-radius: 4px;
+    margin-top: 8px;
+  }
+  .matrix-preview .pixel { width: 8px; height: 8px; cursor: default; }
+  textarea, pre {
+    width: 100%;
+    background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 8px; font-family: inherit; font-size: 12px;
+    resize: vertical;
+  }
+  textarea { min-height: 80px; }
+  pre { white-space: pre-wrap; word-break: break-all; min-height: 40px; margin: 0; }
+  .copy-btn {
+    float: right; font-size: 11px;
+    background: var(--accent); color: var(--bg); border: none;
+    padding: 2px 8px; border-radius: 3px; cursor: pointer;
+  }
+  .copy-btn:hover { opacity: 0.8; }
+  .help { font-size: 11px; opacity: 0.6; margin-top: 8px; line-height: 1.5; }
+  .row { margin-bottom: 16px; }
+  details summary { cursor: pointer; font-size: 12px; opacity: 0.7; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+
+<div class="panel">
+  <h1>🎨 Sprite editor — TC001 (32×8 LED matrix)</h1>
+
+  <div id="projectMode" style="background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; margin-bottom: 16px;">
+    <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+      <button onclick="openProjectDir()" style="background: var(--accent); color: var(--bg); border: none; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-weight: 600;">📁 Ouvrir le dossier projet</button>
+      <input id="presetNameInput" placeholder="Nom du preset" oninput="onPresetNameChange()" maxlength="20" style="display:none; background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:4px; padding:6px 10px; font-family:inherit; font-size:12px; width:170px;">
+      <button id="saveBtn" onclick="saveSprite()" style="display: none; background: #2ea043; color: white; border: none; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-weight: 600;">💾 Save</button>
+      <button onclick="forgetProjectDir()" style="background: var(--bg); color: var(--text); border: 1px solid var(--border); padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 11px;">🗑 Forget</button>
+      <span id="projectStatus" style="font-size: 12px; opacity: 0.7;">Aucun dossier ouvert</span>
+    </div>
+    <div id="spriteList" style="margin-top: 10px; display: none;"></div>
+    <div class="help">
+      Ouvre la racine du projet (dossier <code>nightscout-clock/</code>). L'outil trouve automatiquement
+      <code>src/ble_prod_main.cpp</code> et <code>lib/Fonts/AwtrixFont.h</code>.
+      Le dossier est mémorisé entre sessions (IndexedDB) — aucun re-clic au prochain démarrage.
+    </div>
+  </div>
+
+  <div class="controls">
+    <label>Largeur:</label>
+    <input type="number" id="width" value="5" min="1" max="32">
+    <label>Hauteur:</label>
+    <input type="number" id="height" value="5" min="1" max="8">
+    <button onclick="resizeGrid()">Resize</button>
+    <button onclick="clearGrid()">Clear</button>
+    <button onclick="invert()">Invert</button>
+    <span style="opacity:0.6; font-size:11px;">Décaler:</span>
+    <button onclick="shiftGrid(0,-1)" title="Décaler vers le haut">↑</button>
+    <button onclick="shiftGrid(0,1)" title="Décaler vers le bas">↓</button>
+    <button onclick="shiftGrid(-1,0)" title="Décaler à gauche">←</button>
+    <button onclick="shiftGrid(1,0)" title="Décaler à droite">→</button>
+    <button onclick="centerGrid()" title="Centrer automatiquement le glyphe">⊙ Center</button>
+    <span style="opacity:0.6; font-size:11px;">Couleur:</span>
+    <div id="currentColorChip" onclick="togglePalette()" title="Couleur courante (clic pour ouvrir la palette)" style="width:24px; height:24px; border:2px solid var(--accent); border-radius:3px; background:#FFFFFF; cursor:pointer;"></div>
+    <button onclick="togglePalette()" id="paletteBtn" title="Palette par teinte" style="background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:4px; padding:4px 10px; cursor:pointer; font-family:inherit; font-size:11px;">🎨 Palette ▾</button>
+    <span style="opacity:0.4; font-size:10px;">|</span>
+    <span style="opacity:0.6; font-size:10px;">Récents:</span>
+    <div id="recentContainer" style="display:flex; gap:2px; min-width:18px;"></div>
+    <label>Preset:</label>
+    <select id="preset" onchange="loadPreset()">
+      <option value="">—</option>
+      <option value="3x5">Font glyph 3×5</option>
+      <option value="5x5">Trend arrow 5×5</option>
+      <option value="32x8">Pleine matrice 32×8</option>
+    </select>
+  </div>
+  <div id="paletteOverlay" style="display:none; background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:10px 12px; margin-bottom:12px;">
+    <div style="font-size:11px; opacity:0.7; margin-bottom:8px;">Palette par teinte — 4 niveaux de luminosité</div>
+    <div id="paletteGrid"></div>
+  </div>
+
+  <div class="row">
+    <h2>Grille (clic / drag pour activer)</h2>
+    <div id="grid" class="grid"></div>
+  </div>
+
+  <div class="row">
+    <h2>Preview taille réelle</h2>
+    <div id="preview" class="preview"></div>
+  </div>
+
+  <div class="row">
+    <h2>Preview sur matrice 32×8 (placement)</h2>
+    <div class="controls" style="margin-bottom: 4px;">
+      <label>x:</label>
+      <input type="number" id="px" value="27" min="0" max="32">
+      <label>y:</label>
+      <input type="number" id="py" value="1" min="0" max="8">
+      <button onclick="renderMatrix()">Update</button>
+    </div>
+    <div id="matrix" class="matrix-preview"></div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>📺 Aperçu écran (états réels du TC001)</h2>
+  <div id="screenPreviews" style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px;"></div>
+  <div class="help" style="margin-bottom: 16px;">
+    Chaque ligne simule un état réel du firmware (glycémies à différents seuils, labels d'état).
+    Les vignettes utilisent <strong>tes glyphes/sprites courants</strong> du fichier projet.
+    Modifie un pixel → tous les aperçus se mettent à jour. Si ça déborde ou que les chiffres ne sont plus lisibles, c'est ici que tu le verras.
+  </div>
+
+  <h2>Code C (à coller dans ble_prod_main.cpp)</h2>
+  <button class="copy-btn" onclick="copy('cOutput')">Copy</button>
+  <pre id="cOutput"></pre>
+
+  <h2 style="margin-top: 24px;">Visualisation ASCII</h2>
+  <button class="copy-btn" onclick="copy('asciiOutput')">Copy</button>
+  <pre id="asciiOutput"></pre>
+
+  <details style="margin-top: 24px;">
+    <summary>📥 Importer un sprite existant (hex C)</summary>
+    <textarea id="hexInput" placeholder="Coller ici p.ex.: {0x20, 0x70, 0xA8, 0x20, 0x20}"></textarea>
+    <div class="controls" style="margin-top: 8px;">
+      <label>Largeur du sprite:</label>
+      <input type="number" id="importWidth" value="5" min="1" max="32">
+      <button onclick="importHex()">Import</button>
+    </div>
+    <div class="help">
+      Le parser extrait les valeurs 0xNN ou décimales, peu importe le formatage.
+      Largeur = nombre de bits utiles à gauche dans chaque octet.
+    </div>
+  </details>
+
+  <details style="margin-top: 16px;">
+    <summary>📥 Importer ASCII art</summary>
+    <textarea id="asciiInput" placeholder="Coller ici (utilise █ ░ ou X .) p.ex.:&#10;░░█░░&#10;░███░&#10;█░█░█&#10;░░█░░&#10;░░█░░"></textarea>
+    <button onclick="importAscii()" style="margin-top: 8px;">Import</button>
+    <div class="help">Caractères ON: <code>█ X # 1 *</code> · Caractères OFF: <code>░ . _ 0 espace</code></div>
+  </details>
+
+  <details style="margin-top: 16px;">
+    <summary>ℹ️ Comment ça marche</summary>
+    <div class="help">
+      Chaque ligne est encodée comme un octet où les <strong>N bits de poids fort</strong>
+      (N = largeur du sprite) représentent les pixels. Le reste est zéro.
+      <br><br>
+      Exemple ligne <code>░░█░░</code> (largeur 5) :
+      <br>
+      → 00100 en binaire MSB → décalé à gauche dans un octet : <code>0010 0000</code> = <code>0x20</code>.
+      <br><br>
+      C'est le format Adafruit GFX standard, identique pour les glyphes de police (3 bits utilisés)
+      et pour les bitmaps custom (jusqu'à 8 bits).
+    </div>
+  </details>
+</div>
+
+<script>
+let W = 5, H = 5;
+// grid[r][c] = couleur hex string ou null (pixel éteint)
+let grid = [];
+let pixelColor = '#ffffff';  // couleur courante du pinceau
+
+// Vrai si le sprite supporte le multi-couleur (storage RGB565 uint16_t).
+// Pour l'instant : labels uniquement. Digits/arrows/glyphes restent monochromes.
+function isColorSprite(sprite) {
+  // Sprites stockés en uint16_t RGB565 (multi-couleur) : labels + presets.
+  // Arrows et digits restent monochromes (couleur fixée par firmware).
+  if (!sprite || !sprite.name) return false;
+  return sprite.name.startsWith('label_') || sprite.name.startsWith('decor_') || /^preset_\d+_pixels$/.test(sprite.name);
+}
+
+// Convertit "#RRGGBB" en RGB565 (16 bits)
+function hexToRgb565(hex) {
+  if (!hex || hex.length !== 7) return 0;
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+}
+
+// Convertit RGB565 (16 bits) en "#RRGGBB"
+function rgb565ToHex(rgb) {
+  if (!rgb) return null;
+  const r = ((rgb >> 11) & 0x1F) << 3;
+  const g = ((rgb >> 5)  & 0x3F) << 2;
+  const b = ( rgb        & 0x1F) << 3;
+  return '#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('').toUpperCase();
+}
+
+// Couleur firmware par défaut selon le nom du sprite
+function defaultColorForSprite(name) {
+  if (!name) return '#ffffff';
+  if (name.startsWith('digit_'))                       return '#00ff00';  // vert (cible)
+  if (name === 'label_boot' || name === 'label_conn' ||
+      name === 'label_found')                          return '#00ffff';  // cyan
+  if (name === 'label_scan')                           return '#ffff00';  // jaune
+  if (name === 'label_wait')                           return '#ff8000';  // orange
+  if (name === 'label_off' || name === 'label_err')    return '#ff0000';  // rouge
+  if (name === 'label_auth' || name === 'label_bond')  return '#ff00ff';  // magenta
+  if (name === 'label_time')                           return '#ffffff';  // blanc
+  if (name.startsWith('arrow_'))                       return '#ffffff';  // blanc
+  return '#ffffff';
+}
+
+// Palette par teinte : 11 hues × 4 niveaux de luminosité + 1 row gris.
+// Chaque hue a 4 variants pour rendre des nuances tout en restant visible sur LED.
+const HUE_DEFS = [
+  { name: 'Rouge',   h:   0 },
+  { name: 'Orange',  h:  30 },
+  { name: 'Jaune',   h:  60 },
+  { name: 'Lime',    h:  90 },
+  { name: 'Vert',    h: 120 },
+  { name: 'Cyan',    h: 180 },
+  { name: 'Bleu',    h: 210 },
+  { name: 'Indigo',  h: 240 },
+  { name: 'Violet',  h: 270 },
+  { name: 'Magenta', h: 300 },
+  { name: 'Rose',    h: 330 },
+];
+// 4 niveaux de luminosité (full sat) — testés pour LED matrix WS2812B
+const LIGHTNESS_LEVELS = [50, 40, 28, 18];
+
+function hsl2hex(h, s, l) {
+  s /= 100; l /= 100;
+  const k = n => (n + h / 30) % 12;
+  const a = s * Math.min(l, 1 - l);
+  const f = n => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+  const toHex = x => Math.round(x * 255).toString(16).padStart(2, '0');
+  return ('#' + toHex(f(0)) + toHex(f(8)) + toHex(f(4))).toUpperCase();
+}
+
+const RECENT_KEY = 'sprite_editor_recent_colors';
+const RECENT_MAX = 8;
+let recentColors = JSON.parse(localStorage.getItem(RECENT_KEY) || '[]');
+
+function setPixelColor(hex) {
+  pixelColor = hex.toUpperCase();
+  document.getElementById('currentColorChip').style.background = pixelColor;
+  document.documentElement.style.setProperty('--pixel-on', pixelColor);
+  recentColors = [pixelColor, ...recentColors.filter(c => c !== pixelColor)].slice(0, RECENT_MAX);
+  localStorage.setItem(RECENT_KEY, JSON.stringify(recentColors));
+  renderPalette();
+  renderAll();
+}
+
+function colorSwatchHTML(hex, isCurrent, sz = 22) {
+  const border = isCurrent ? '2px solid #58a6ff' : '1px solid #30363d';
+  return `<div onclick="setPixelColor('${hex}')" title="${hex}" style="width:${sz}px; height:${sz}px; background:${hex}; border:${border}; border-radius:3px; cursor:pointer; flex-shrink:0;"></div>`;
+}
+
+function renderPalette() {
+  // Récents (inline)
+  const rc = document.getElementById('recentContainer');
+  if (rc) {
+    rc.innerHTML = recentColors.length === 0
+      ? '<span style="opacity:0.4; font-size:10px; align-self:center;">—</span>'
+      : recentColors.map(c => colorSwatchHTML(c, c === pixelColor)).join('');
+  }
+
+  // Panneau par teintes (panel)
+  const pg = document.getElementById('paletteGrid');
+  if (!pg) return;
+  let html = '';
+  // Row grayscale
+  const grays = ['#FFFFFF', '#BFBFBF', '#7F7F7F', '#404040'];
+  html += `<div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
+    <span style="width:60px; font-size:10px; opacity:0.6;">Gris</span>
+    ${grays.map(c => colorSwatchHTML(c, c === pixelColor)).join('')}
+  </div>`;
+  // Rows par teinte
+  for (const hue of HUE_DEFS) {
+    const swatches = LIGHTNESS_LEVELS.map(l => hsl2hex(hue.h, 100, l));
+    html += `<div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
+      <span style="width:60px; font-size:10px; opacity:0.6;">${hue.name}</span>
+      ${swatches.map(c => colorSwatchHTML(c, c === pixelColor)).join('')}
+    </div>`;
+  }
+  pg.innerHTML = html;
+}
+
+function togglePalette() {
+  const ov = document.getElementById('paletteOverlay');
+  const isOpen = ov.style.display !== 'none';
+  ov.style.display = isOpen ? 'none' : 'block';
+  document.getElementById('paletteBtn').innerHTML = isOpen ? '🎨 Palette ▾' : '🎨 Palette ▴';
+}
+
+// ── Project file mode (File System Access API + IndexedDB) ──────────────────
+let dirHandle = null;             // racine du projet
+let openFiles = [];               // [{handle, name, content, sprites: [...]}]
+let detectedSprites = [];         // sprites de TOUS les fichiers, agrégés
+let currentSprite = null;         // sprite en cours d'édition
+const PROJECT_FILES = [
+  'src/ble_prod_main.cpp',
+  'lib/Fonts/AwtrixFont.h',
+];
+
+// IndexedDB ultra-minimal pour stocker le dirHandle
+function idbGet(key) {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open('sprite_editor', 1);
+    req.onupgradeneeded = e => e.target.result.createObjectStore('handles');
+    req.onsuccess = e => {
+      const db = e.target.result;
+      const tx = db.transaction('handles', 'readonly');
+      const r = tx.objectStore('handles').get(key);
+      r.onsuccess = () => resolve(r.result);
+      r.onerror = () => reject(r.error);
+    };
+    req.onerror = () => reject(req.error);
+  });
+}
+function idbSet(key, value) {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open('sprite_editor', 1);
+    req.onupgradeneeded = e => e.target.result.createObjectStore('handles');
+    req.onsuccess = e => {
+      const db = e.target.result;
+      const tx = db.transaction('handles', 'readwrite');
+      tx.objectStore('handles').put(value, key);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    };
+  });
+}
+function idbDel(key) {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open('sprite_editor', 1);
+    req.onupgradeneeded = e => e.target.result.createObjectStore('handles');
+    req.onsuccess = e => {
+      const db = e.target.result;
+      const tx = db.transaction('handles', 'readwrite');
+      tx.objectStore('handles').delete(key);
+      tx.oncomplete = () => resolve();
+    };
+  });
+}
+
+async function openProjectDir() {
+  if (!window.showDirectoryPicker) {
+    alert('File System Access API non supportée. Utilise Chrome, Edge ou Opera.');
+    return;
+  }
+  try {
+    const handle = await window.showDirectoryPicker({mode: 'readwrite'});
+    await idbSet('dirHandle', handle);
+    dirHandle = handle;
+    await loadAllProjectFiles();
+  } catch (e) {
+    if (e.name !== 'AbortError') alert('Erreur: ' + e.message);
+  }
+}
+
+async function forgetProjectDir() {
+  await idbDel('dirHandle');
+  dirHandle = null;
+  openFiles = [];
+  detectedSprites = [];
+  currentSprite = null;
+  document.getElementById('projectStatus').textContent = 'Aucun dossier ouvert';
+  document.getElementById('spriteList').style.display = 'none';
+  document.getElementById('saveBtn').style.display = 'none';
+  // Déverrouille les dimensions (mode standalone)
+  document.getElementById('width').disabled = false;
+  document.getElementById('height').disabled = false;
+  document.getElementById('width').title = '';
+  document.getElementById('height').title = '';
+}
+
+// Restaure depuis IndexedDB au démarrage (silencieux si permission encore valide)
+async function restoreProjectDir() {
+  try {
+    const handle = await idbGet('dirHandle');
+    if (!handle) return;
+    const perm = await handle.queryPermission({mode: 'readwrite'});
+    if (perm === 'granted') {
+      dirHandle = handle;
+      await loadAllProjectFiles();
+    } else if (perm === 'prompt') {
+      // Le navigateur demandera après une interaction utilisateur.
+      // On affiche un bouton clair pour ré-autoriser.
+      document.getElementById('projectStatus').innerHTML =
+        `📁 Dossier mémorisé : <strong>${handle.name}</strong> — <a href="#" onclick="reauthorize();return false;" style="color:var(--accent);">cliquer pour autoriser</a>`;
+      window._pendingHandle = handle;
+    }
+  } catch (e) { /* IDB vide, premier lancement */ }
+}
+
+async function reauthorize() {
+  if (!window._pendingHandle) return;
+  const perm = await window._pendingHandle.requestPermission({mode: 'readwrite'});
+  if (perm === 'granted') {
+    dirHandle = window._pendingHandle;
+    delete window._pendingHandle;
+    await loadAllProjectFiles();
+  }
+}
+
+// Lit tous les fichiers projet, parse, agrège les sprites
+async function loadAllProjectFiles() {
+  openFiles = [];
+  detectedSprites = [];
+
+  for (const path of PROJECT_FILES) {
+    try {
+      const handle = await getFileHandleByPath(dirHandle, path);
+      if (!handle) continue;
+      const file = await handle.getFile();
+      const content = await file.text();
+      const f = { handle, name: path, content, sprites: [] };
+      parseSpritesFrom(f);
+      console.log(`[sprite_editor] ${path}: ${content.length} octets, ${f.sprites.length} sprites détectés`);
+      console.log(`  inline=${f.sprites.filter(s=>!s.isFontGlyph).map(s=>s.name).join(',')}`);
+      console.log(`  glyphs=${f.sprites.filter(s=>s.isFontGlyph).length}`);
+      openFiles.push(f);
+    } catch (e) {
+      console.warn(`Skip ${path}: ${e.message}`);
+    }
+  }
+
+  // Agrège tous les sprites avec leur fichier d'origine
+  for (const f of openFiles) {
+    for (const s of f.sprites) {
+      s.fileRef = f;
+      detectedSprites.push(s);
+    }
+  }
+
+  console.log(`[sprite_editor] TOTAL : ${detectedSprites.length} sprites`);
+  console.log(`  digit_* : ${detectedSprites.filter(s=>s.name.startsWith('digit_')).map(s=>s.name).join(', ')}`);
+  console.log(`  label_* : ${detectedSprites.filter(s=>s.name.startsWith('label_')).map(s=>s.name).join(', ')}`);
+  console.log(`  arrow_* : ${detectedSprites.filter(s=>s.name.startsWith('arrow_')).map(s=>s.name).join(', ')}`);
+
+  document.getElementById('projectStatus').textContent =
+    `📁 ${dirHandle.name} — ${openFiles.length} fichier(s), ${detectedSprites.length} sprites`;
+  renderSpriteList();
+  renderScreenPreviews();
+}
+
+async function getFileHandleByPath(rootDir, path) {
+  const parts = path.split('/');
+  let dir = rootDir;
+  for (let i = 0; i < parts.length - 1; i++) {
+    dir = await dir.getDirectoryHandle(parts[i]);
+  }
+  return await dir.getFileHandle(parts[parts.length - 1]);
+}
+
+function parseSpritesFrom(f) {
+  // 1a. Sprites inline uint8_t : static const uint8_t NAME[] PROGMEM = {0x..., ...};
+  const reInline = /static\s+const\s+uint8_t\s+(\w+)\s*\[\s*\]\s+PROGMEM\s*=\s*\{([^}]+)\}\s*;/g;
+  let m;
+  while ((m = reInline.exec(f.content)) !== null) {
+    const bytes = parseBytes(m[2]);
+    if (bytes.length === 0 || bytes.length > 256) continue;
+    f.sprites.push({
+      name: m[1],
+      bytes,
+      raw: m[0],
+      isFontGlyph: false,
+      isColor: false,
+    });
+  }
+
+  // 1b. Sprites inline uint16_t (multi-couleur RGB565) : static const uint16_t NAME[] PROGMEM = {...};
+  //     Peuvent contenir un nom de macro comme LABEL_EMPTY_256 → on parse les valeurs hex/dec.
+  const reColor = /static\s+const\s+uint16_t\s+(\w+)\s*\[\s*\]\s+PROGMEM\s*=\s*\{([^}]+)\}\s*;/g;
+  while ((m = reColor.exec(f.content)) !== null) {
+    let body = m[2];
+    if (/LABEL_EMPTY_256/.test(body)) {
+      body = '0,'.repeat(256);
+    }
+    const values = parseBytes(body);
+    if (values.length === 0 || values.length > 4096) continue;
+    const sprite = {
+      name: m[1],
+      bytes: values,
+      raw: m[0],
+      isFontGlyph: false,
+      isColor: true,
+    };
+    // Pour les presets, parse aussi le `preset_N_name` correspondant
+    const pm = m[1].match(/^preset_(\d+)_pixels$/);
+    if (pm) {
+      const slot = pm[1];
+      const reName = new RegExp('static\\s+const\\s+char\\s+preset_' + slot + '_name\\s*\\[\\]\\s*=\\s*"([^"]*)"\\s*;');
+      const nameMatch = f.content.match(reName);
+      sprite.presetName = nameMatch ? nameMatch[1] : '';
+      sprite.presetSlot = parseInt(slot);
+      sprite.nameRaw = nameMatch ? nameMatch[0] : null;
+    }
+    f.sprites.push(sprite);
+  }
+  // 2. Font glyphs (1..8 octets) : 0xNN, ... /*[idx] 0xCC name */
+  //    `*` au lieu de `{1,8}` pour accepter les glyphes à 1 octet (point, virgule, etc.)
+  const reGlyph = /^(\s*)((?:0x[0-9a-fA-F]{2}\s*,\s*)*0x[0-9a-fA-F]{2})\s*,?\s*\/\*\[(\d+)\]\s*0x([0-9a-fA-F]+)\s+(\w+)\s*\*\//gm;
+  while ((m = reGlyph.exec(f.content)) !== null) {
+    const bytes = parseBytes(m[2]);
+    if (bytes.length === 0) continue;
+    const charCode = parseInt(m[4], 16);
+    f.sprites.push({
+      name: `${m[5]} ('${displayChar(charCode)}')`,
+      bytes,
+      raw: m[0],
+      bytesRaw: m[2],
+      isFontGlyph: true,
+      charCode,
+    });
+  }
+}
+
+// Affichage lisible d'un charCode pour la liste de sprites.
+// 0x20-0x7E : ASCII printable direct
+// 0xA0-0xFF : Latin-1 supplement (é, à, etc.) — printable
+// 0x7F-0x9F : zone control / Win-1252 → fallback hex
+function displayChar(charCode) {
+  if (charCode === 0x20) return '␣';
+  if (charCode >= 0x21 && charCode <= 0x7E) return String.fromCharCode(charCode);
+  if (charCode >= 0xA0 && charCode <= 0xFF) return String.fromCharCode(charCode);
+  return '0x' + charCode.toString(16).toUpperCase().padStart(2, '0');
+}
+
+function detectSprites() {
+  detectedSprites = [];
+
+  // 1. Inline arrays : static const uint8_t NAME[] PROGMEM = {0x20, ...};
+  const reInline = /static\s+const\s+uint8_t\s+(\w+)\s*\[\s*\]\s+PROGMEM\s*=\s*\{([^}]+)\}\s*;/g;
+  let m;
+  while ((m = reInline.exec(fileContent)) !== null) {
+    const bytes = parseBytes(m[2]);
+    if (bytes.length === 0) continue;
+    detectedSprites.push({
+      name: m[1],
+      bytes,
+      raw: m[0],
+      rawIndex: m.index,
+      isFontGlyph: false,
+    });
+  }
+
+  // 2. Font glyph lines (AwtrixFont format) :
+  //    0xE0, 0xA0, 0xA0, 0xA0, 0xE0,       /*[16]   0x30 zero */
+  const reGlyph = /^(\s*)((?:0x[0-9a-fA-F]{2}\s*,\s*){1,8}0x[0-9a-fA-F]{2})\s*,?\s*\/\*\[(\d+)\]\s*0x([0-9a-fA-F]+)\s+(\w+)\s*\*\//gm;
+  while ((m = reGlyph.exec(fileContent)) !== null) {
+    const bytes = parseBytes(m[2]);
+    if (bytes.length === 0) continue;
+    const charCode = parseInt(m[4], 16);
+    const charName = m[5];
+    const printable = (charCode >= 0x20 && charCode <= 0x7E) ? String.fromCharCode(charCode) : '?';
+    detectedSprites.push({
+      name: `${charName} ('${printable}', ${bytes.length}px h)`,
+      bytes,
+      raw: m[0],
+      bytesRaw: m[2],         // juste la partie bytes pour le replace
+      rawIndex: m.index,
+      isFontGlyph: true,
+      charCode,
+    });
+  }
+
+  renderSpriteList();
+}
+
+function parseBytes(str) {
+  return [...str.matchAll(/0x([0-9a-fA-F]+)|(\d+)/g)]
+    .map(m => parseInt(m[0], m[0].startsWith('0x') ? 16 : 10));
+}
+
+// Génère le HTML d'une mini-thumbnail visuelle d'un sprite.
+// Supporte multi-octets par ligne (ceil(w/8) octets/ligne).
+function thumbnailHTML(bytes, w, pixelSize = 4, isColor = false) {
+  const h = isColor ? Math.floor(bytes.length / w) : Math.floor(bytes.length / Math.ceil(w / 8));
+  let cells = '';
+  if (isColor) {
+    // 1 valeur uint16 par pixel
+    for (let r = 0; r < h; r++) {
+      for (let c = 0; c < w; c++) {
+        const v = bytes[r * w + c] || 0;
+        const bg = v ? rgb565ToHex(v) : '#1f242c';
+        cells += `<div style="background:${bg};"></div>`;
+      }
+    }
+  } else {
+    const bytesPerRow = Math.ceil(w / 8);
+    for (let r = 0; r < h; r++) {
+      for (let c = 0; c < w; c++) {
+        const byteIdx = r * bytesPerRow + Math.floor(c / 8);
+        const bitIdx = 7 - (c % 8);
+        const on = (bytes[byteIdx] >> bitIdx) & 1;
+        cells += `<div style="background:${on ? '#ffffff' : '#1f242c'};"></div>`;
+      }
+    }
+  }
+  return `<div style="display:grid; grid-template-columns:repeat(${w}, ${pixelSize}px); grid-template-rows:repeat(${h}, ${pixelSize}px); gap:1px; background:#000; padding:2px; border-radius:2px;">${cells}</div>`;
+}
+
+function renderSpriteList() {
+  const container = document.getElementById('spriteList');
+  if (detectedSprites.length === 0) {
+    container.style.display = 'block';
+    container.innerHTML = '<div style="opacity:0.6; font-size:12px;">Aucun sprite détecté.</div>';
+    return;
+  }
+  container.style.display = 'block';
+
+  const inline = detectedSprites.filter(s => !s.isFontGlyph);
+  const glyphs = detectedSprites.filter(s => s.isFontGlyph);
+
+  let html = '';
+
+  // Section sprites inline (5×5 par défaut, ou 32×8 si label_*)
+  if (inline.length > 0) {
+    html += `<div style="font-size:12px; margin-bottom:6px; opacity:0.7;">Sprites custom (${inline.length}) — clic pour éditer :</div>`;
+    html += '<div style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px;">';
+    for (const s of inline) {
+      const idx = detectedSprites.indexOf(s);
+      const isActive = currentSprite === s;
+      const isWide = s.name.startsWith('label_') || s.name.startsWith('decor_') || /^preset_\d+_pixels$/.test(s.name);
+      const isDoubleArrow = (s.name === 'arrow_doubleUp' || s.name === 'arrow_doubleDown');
+      // Largeur du sprite : 32 pour labels/decor, 10 pour flèches doubles, 5 pour le reste
+      const w = isWide ? 32 : (isDoubleArrow ? 10 : 5);
+      const px = isWide ? 3 : 5;  // pixel size : sprites larges plus petits pour rentrer
+      html += `<div onclick="loadSpriteByIdx(${idx})" style="cursor:pointer; padding:6px; border-radius:4px; background:${isActive ? 'var(--accent)' : 'var(--panel)'}; border:1px solid ${isActive ? 'var(--accent)' : 'var(--border)'}; display:flex; flex-direction:column; align-items:center; gap:4px;" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='${isActive ? 'var(--accent)' : 'var(--border)'}'">`;
+      html += thumbnailHTML(s.bytes, w, px, isWide);
+      let cleanName;
+      const presetMatch = s.name.match(/^preset_(\d+)_pixels$/);
+      if (presetMatch) {
+        const slot = presetMatch[1];
+        const name = (s.presetName || '').trim();
+        cleanName = name ? ('🎨 ' + name) : ('🎨 slot ' + slot);
+      } else {
+        cleanName = s.name.replace('arrow_', '').replace('label_', '').replace('digit_', '#').replace('decor_', '🎨 ');
+      }
+      html += `<div style="font-size:9px; opacity:0.85; max-width:140px; word-break:break-word; text-align:center; color:${isActive ? 'var(--bg)' : 'var(--text)'};">${cleanName}</div>`;
+      html += '</div>';
+    }
+    html += '</div>';
+  }
+
+  // Section font glyphs (3×5)
+  if (glyphs.length > 0) {
+    html += `<div style="font-size:12px; margin-bottom:6px; opacity:0.7;">Glyphes police (${glyphs.length}) — clic pour éditer :</div>`;
+    html += '<div style="display:flex; flex-wrap:wrap; gap:5px; max-height:280px; overflow-y:auto; padding-right:4px;">';
+    for (const s of glyphs) {
+      const idx = detectedSprites.indexOf(s);
+      const isActive = currentSprite === s;
+      const labelChar = displayChar(s.charCode);
+      const hex = '0x' + s.charCode.toString(16).padStart(2,'0').toUpperCase();
+      // Largeur réelle du glyphe pour la vignette (3, 4 ou 5 selon le glyphe)
+      const w = Math.max(3, detectGlyphWidth(s.bytes));
+      html += `<div onclick="loadSpriteByIdx(${idx})" title="${hex} ${labelChar}" style="cursor:pointer; padding:4px; border-radius:3px; background:${isActive ? 'var(--accent)' : 'var(--panel)'}; border:1px solid ${isActive ? 'var(--accent)' : 'var(--border)'}; display:flex; flex-direction:column; align-items:center; gap:3px;" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='${isActive ? 'var(--accent)' : 'var(--border)'}'">`;
+      html += thumbnailHTML(s.bytes, w, 4);
+      html += `<div style="font-size:10px; font-weight:bold; color:${isActive ? 'var(--bg)' : 'var(--accent)'};">${labelChar}</div>`;
+      html += '</div>';
+    }
+    html += '</div>';
+  }
+
+  container.innerHTML = html;
+}
+
+function loadSpriteByIdx(i) {
+  const s = detectedSprites[i];
+  currentSprite = s;
+  // Sauvegarde une copie immutable des bytes initiaux pour le bouton Reset/Clear
+  s.originalBytes = [...s.bytes];
+  // Détermine W et H selon le type/nom :
+  //   - label_*  → 32×8 (plein-écran, 4 octets/ligne)
+  //   - font glyph → 3 wide
+  //   - autre (arrow) → 5 wide
+  // Dimensions FORCÉES pour matcher ce que le firmware lit (sécurise les redesigns).
+  // Si le fichier a + d'octets que prévu, on tronque. Si moins, le reste sera
+  // rempli de 0 par l'unpacking (octet inexistant → 0).
+  let guessW, guessH;
+  if (s.name.startsWith('label_') || s.name.startsWith('decor_') || /^preset_\d+_pixels$/.test(s.name)) {
+    guessW = 32; guessH = 8;        // firmware drawBitmap/drawColorSprite (... 32, 8, ...)
+  } else if (s.name.startsWith('digit_')) {
+    guessW = 5;  guessH = 8;        // firmware drawBitmap(... 5, 8, ...)
+  } else if (s.name.startsWith('arrow_')) {
+    // Flèches doubles font 10×5 ; les autres 5×5
+    if (s.name === 'arrow_doubleUp' || s.name === 'arrow_doubleDown') {
+      guessW = 10; guessH = 5;
+    } else {
+      guessW = 5;  guessH = 5;
+    }
+  } else if (s.isFontGlyph) {
+    // Détecte largeur réelle (3 pour majorité, 4 pour N, 5 pour M/W, etc.)
+    guessW = Math.max(3, detectGlyphWidth(s.bytes));
+    guessH = s.bytes.length;
+  } else {
+    guessW = 5;  guessH = s.bytes.length;
+  }
+  W = guessW; H = guessH;
+  document.getElementById('width').value = W;
+  document.getElementById('height').value = H;
+
+  // Met à jour pixelColor (sans déclencher renderAll qui casserait sur grid de l'ancienne taille)
+  pixelColor = defaultColorForSprite(s.name).toUpperCase();
+  document.getElementById('currentColorChip').style.background = pixelColor;
+  document.documentElement.style.setProperty('--pixel-on', pixelColor);
+
+  // Unpack bytes en grille (color string ou null par pixel) AVEC les nouvelles dimensions
+  grid = unpackToGrid(s, s.bytes);
+
+  renderGrid();
+  renderAll();           // tout rendre maintenant que grid + W + H sont cohérents
+  renderPalette();       // refresh du chip courant dans la palette
+  renderSpriteList();
+  document.getElementById('saveBtn').style.display = 'inline-block';
+
+  // Affiche l'input "Nom du preset" uniquement pour les sprites preset_N_pixels
+  const nameInput = document.getElementById('presetNameInput');
+  if (s.presetSlot !== undefined) {
+    nameInput.style.display = 'inline-block';
+    nameInput.value = s.presetName || '';
+  } else {
+    nameInput.style.display = 'none';
+  }
+
+  document.getElementById('projectStatus').textContent =
+    `📄 ${currentSprite.fileRef.name} → édition de "${s.name}" (${W}×${H}) — dimensions verrouillées`;
+
+  // Verrouille les dimensions : impossible de redimensionner un sprite projet
+  // (changer la taille casse souvent l'affichage du firmware ou la police)
+  document.getElementById('width').disabled = true;
+  document.getElementById('height').disabled = true;
+  document.getElementById('width').title = 'Verrouillé : sprite chargé depuis le projet';
+  document.getElementById('height').title = 'Verrouillé : sprite chargé depuis le projet';
+}
+
+// Mise à jour de presetName en mémoire quand l'user tape dans l'input
+function onPresetNameChange() {
+  if (!currentSprite || currentSprite.presetSlot === undefined) return;
+  currentSprite.presetName = document.getElementById('presetNameInput').value;
+  // Update label affiché dans la liste sprites
+  const scroll = document.getElementById('spriteList').scrollTop;
+  renderSpriteList();
+  document.getElementById('spriteList').scrollTop = scroll;
+}
+
+async function saveSprite() {
+  if (!currentSprite || !currentSprite.fileRef) return;
+  const f = currentSprite.fileRef;
+
+  const newBytes = gridToBytes();
+  const isColor = currentSprite.isColor;
+  // uint16 → 0xRRRR (4 hex), uint8 → 0xRR (2 hex)
+  const padLen = isColor ? 4 : 2;
+  const newBytesStr = newBytes.map(b => '0x' + b.toString(16).toUpperCase().padStart(padLen, '0')).join(', ');
+
+  let newContent;
+  if (currentSprite.isFontGlyph) {
+    const newRaw = currentSprite.raw.replace(currentSprite.bytesRaw, newBytesStr);
+    newContent = f.content.replace(currentSprite.raw, newRaw);
+  } else {
+    const newDecl = currentSprite.raw.replace(/\{[^}]+\}/, '{ ' + newBytesStr + ' }');
+    newContent = f.content.replace(currentSprite.raw, newDecl);
+  }
+
+  // Pour les preset slots : on écrit aussi le preset_N_name avec la valeur courante
+  if (currentSprite.presetSlot !== undefined) {
+    const slot = currentSprite.presetSlot;
+    const newName = (currentSprite.presetName || '').replace(/"/g, '\\"');  // échappe les guillemets
+    const reName = new RegExp('static\\s+const\\s+char\\s+preset_' + slot + '_name\\s*\\[\\]\\s*=\\s*"[^"]*"\\s*;');
+    const newNameLine = `static const char     preset_${slot}_name[]      = "${newName}";`;
+    if (reName.test(newContent)) {
+      newContent = newContent.replace(reName, newNameLine);
+    }
+  }
+
+  if (newContent === f.content) {
+    alert('Aucun changement détecté');
+    return;
+  }
+
+  try {
+    const writable = await f.handle.createWritable();
+    await writable.write(newContent);
+    await writable.close();
+    f.content = newContent;
+    // Re-detect (positions peuvent avoir bougé après le replace)
+    const savedName = currentSprite.name;
+    f.sprites = [];
+    parseSpritesFrom(f);
+    detectedSprites = [];
+    for (const fi of openFiles) for (const s of fi.sprites) { s.fileRef = fi; detectedSprites.push(s); }
+
+    // Re-attach currentSprite à la version fraîchement parsée (sinon save suivant
+    // échoue car .raw pointe sur du texte qui n'existe plus dans f.content)
+    const refreshed = detectedSprites.find(s => s.name === savedName);
+    if (refreshed) {
+      currentSprite = refreshed;
+      // Met à jour les bytes "Clear" pour refléter le nouveau state sauvegardé
+      currentSprite.originalBytes = [...refreshed.bytes];
+    }
+
+    document.getElementById('projectStatus').textContent =
+      `✅ "${savedName}" sauvegardé dans ${f.name}`;
+    setTimeout(() => {
+      if (dirHandle) document.getElementById('projectStatus').textContent =
+        `📁 ${dirHandle.name} — ${openFiles.length} fichier(s), ${detectedSprites.length} sprites`;
+    }, 2500);
+    renderSpriteList();
+  } catch (e) {
+    alert('Erreur sauvegarde: ' + e.message);
+  }
+}
+
+// ── Aperçu écran : simule la matrice 32×8 avec tes glyphes ─────────────────
+// Couleurs RGB → CSS (correspondent aux #define du firmware)
+const COL = {
+  RED: '#ff0000', GREEN: '#00ff00', YELLOW: '#ffff00',
+  ORANGE: '#ff8000', CYAN: '#00ffff', WHITE: '#ffffff',
+  MAGENTA: '#ff00ff', GRAY: '#808080',
+};
+
+// Réplique exactement glucoseColorMgdl du firmware (logique 5 zones glucose-reader)
+function glucoseColor(mgdl) {
+  if (mgdl < 54 || mgdl > 250) return COL.RED;
+  if (mgdl < 70 || mgdl > 180) return COL.YELLOW;
+  return COL.GREEN;
+}
+
+// Trouve le glyphe (sprite font) par charCode dans detectedSprites
+function findGlyph(charCode) {
+  for (const s of detectedSprites) {
+    if (s.isFontGlyph && s.charCode === charCode) return s;
+  }
+  return null;
+}
+
+// Trouve un sprite custom par nom (pour les flèches)
+function findSprite(name) {
+  for (const s of detectedSprites) {
+    if (!s.isFontGlyph && s.name === name) return s;
+  }
+  return null;
+}
+
+// Mappe la valeur trend Dexcom (mg/dL/min × 10) au nom de sprite
+function trendArrowName(trend) {
+  if (trend > 30) return 'arrow_doubleUp';
+  if (trend > 20) return 'arrow_singleUp';
+  if (trend > 10) return 'arrow_fortyFiveUp';
+  if (trend >= -10) return 'arrow_flat';
+  if (trend >= -20) return 'arrow_fortyFiveDown';
+  if (trend >= -30) return 'arrow_singleDown';
+  return 'arrow_doubleDown';
+}
+
+// Crée matrice 32×8 vide [y][x] = couleur ou null
+function createMatrix() {
+  return Array.from({length: 8}, () => Array(32).fill(null));
+}
+
+// Détecte la largeur visible réelle d'un glyphe.
+// Pour 0xE0 = 11100000, les bits 7,6,5 sont allumés → cols 0,1,2 → width = 3.
+// On cherche le BIT LE PLUS BAS allumé (= colonne la plus à droite visible),
+// puis width = 8 - bit_le_plus_bas. Itère 0→7 pour trouver le plus bas en premier.
+function detectGlyphWidth(bytes) {
+  let maxW = 0;
+  for (const b of bytes) {
+    if (b === 0) continue;  // ligne vide n'étend pas la largeur
+    for (let bit = 0; bit < 8; bit++) {
+      if ((b >> bit) & 1) {
+        const w = 8 - bit;
+        if (w > maxW) maxW = w;
+        break;
+      }
+    }
+  }
+  return Math.max(maxW, 1);
+}
+
+// Dessine un glyphe à (x_cursor, y_baseline). Si le glyphe est plus haut que 6 px
+// (déborderait avec yOffset=-5 standard), on l'ancre pour qu'il reste visible.
+function drawChar(matrix, glyph, x, yBaseline, color, charWidth, yOffset = -5) {
+  const h = glyph.bytes.length;
+  // largeur réelle : utilise charWidth si fourni, sinon détecte
+  const w = charWidth !== undefined ? charWidth : detectGlyphWidth(glyph.bytes);
+  // top demandé par la baseline+yOffset
+  let top = yBaseline + yOffset;
+  // si le glyphe déborde en bas (top + h > 8), on remonte pour qu'il rentre
+  if (top + h > 8) top = 8 - h;
+  if (top < 0) top = 0;  // pour glyphes de 8 px tall : commence à row 0
+  for (let r = 0; r < h; r++) {
+    for (let c = 0; c < w; c++) {
+      if ((glyph.bytes[r] >> (7 - c)) & 1) {
+        const px = x + c, py = top + r;
+        if (px >= 0 && px < 32 && py >= 0 && py < 8) matrix[py][px] = color;
+      }
+    }
+  }
+}
+
+// Largeur réelle d'un caractère (ce qui correspond grosso modo au xAdvance)
+// Pour simplifier on hardcode les valeurs Awtrix les plus courantes
+function charAdvance(charCode) {
+  // chiffres 0-9, lettres A-Z et a-z : xAdvance = 4 (3 visibles + 1 gap)
+  if ((charCode >= 0x30 && charCode <= 0x39) ||
+      (charCode >= 0x41 && charCode <= 0x5A) ||
+      (charCode >= 0x61 && charCode <= 0x7A)) return 4;
+  if (charCode === 0x20) return 2;  // space
+  if (charCode === 0x21 || charCode === 0x2E) return 2;  // ! .
+  return 4;  // par défaut
+}
+
+// Largeur totale d'un texte en pixels (sum xAdvance, dernier sans gap)
+function textWidth(text) {
+  let w = 0;
+  for (let i = 0; i < text.length; i++) w += charAdvance(text.charCodeAt(i));
+  return Math.max(0, w - 1);
+}
+
+// Dessine un texte avec alignement (LEFT, RIGHT, CENTER)
+function drawText(matrix, text, x, yBaseline, color, align = 'LEFT') {
+  let cursor;
+  if (align === 'LEFT') cursor = x;
+  else if (align === 'RIGHT') cursor = x - textWidth(text);
+  else if (align === 'CENTER') cursor = Math.floor((32 - textWidth(text)) / 2);
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text.charCodeAt(i);
+    const glyph = findGlyph(ch);
+    if (glyph) drawChar(matrix, glyph, cursor, yBaseline, color);
+    cursor += charAdvance(ch);
+  }
+}
+
+// Dessine un sprite bitmap à (x, y).
+// Si sprite multi-couleur (isColor) : 1 valeur uint16 par pixel, couleur lue depuis le sprite.
+// Sinon : 1-bit packé (ceil(w/8) octets/ligne), couleur passée en param.
+function drawSprite(matrix, sprite, x, y, color, w = 5, h = 5) {
+  if (!sprite) return;
+  if (sprite.isColor) {
+    for (let r = 0; r < h; r++) {
+      for (let c = 0; c < w; c++) {
+        const v = sprite.bytes[r * w + c] || 0;
+        if (v) {
+          const px = x + c, py = y + r;
+          if (px >= 0 && px < 32 && py >= 0 && py < 8) matrix[py][px] = rgb565ToHex(v);
+        }
+      }
+    }
+  } else {
+    const bytesPerRow = Math.ceil(w / 8);
+    for (let r = 0; r < h; r++) {
+      for (let c = 0; c < w; c++) {
+        const byteIdx = r * bytesPerRow + Math.floor(c / 8);
+        if (byteIdx >= sprite.bytes.length) continue;
+        const bitIdx = 7 - (c % 8);
+        if ((sprite.bytes[byteIdx] >> bitIdx) & 1) {
+          const px = x + c, py = y + r;
+          if (px >= 0 && px < 32 && py >= 0 && py < 8) matrix[py][px] = color;
+        }
+      }
+    }
+  }
+}
+
+// Convertit une matrice en HTML grid
+function matrixToHTML(matrix) {
+  let cells = '';
+  for (let y = 0; y < 8; y++) {
+    for (let x = 0; x < 32; x++) {
+      const c = matrix[y][x];
+      cells += `<div style="background:${c || '#000'};"></div>`;
+    }
+  }
+  return `<div style="display:grid; grid-template-columns:repeat(32, 8px); grid-template-rows:repeat(8, 8px); gap:1px; background:#000; padding:3px; border-radius:3px;">${cells}</div>`;
+}
+
+// Vrai si le sprite est entièrement noir (label pas encore designé)
+function spriteIsEmpty(sprite) {
+  if (!sprite) return true;
+  for (const b of sprite.bytes) if (b !== 0) return false;
+  return true;
+}
+
+// Rend un label : sprite multi-couleur RGB565 (1 uint16 par pixel) si designé.
+// Le firmware supprime le fallback texte ; en preview on garde quand même un fallback
+// pour pouvoir visualiser sans avoir designé tous les labels.
+function drawLabel(matrix, spriteName, fallbackText, fallbackColor) {
+  const sprite = findSprite(spriteName);
+  if (sprite && sprite.isColor && !spriteIsEmpty(sprite)) {
+    // Lit pixel par pixel depuis le sprite RGB565
+    for (let r = 0; r < 8; r++) {
+      for (let c = 0; c < 32; c++) {
+        const v = sprite.bytes[r * 32 + c] || 0;
+        if (v) matrix[r][c] = rgb565ToHex(v);
+      }
+    }
+  } else {
+    drawText(matrix, fallbackText, 0, 6, fallbackColor, 'CENTER');
+  }
+}
+
+// Scénarios à afficher.
+// Labels (BOOT/SCAN/etc) = sprite 32×8 si designé, sinon texte centré (fallback firmware).
+// Glycémies = chiffres rendus via la police + flèche bitmap 5×5.
+const SCREEN_SCENARIOS = [
+  { label: 'BOOT',  desc: 'Démarrage du firmware (init display + check OTA)',         render: m => drawLabel(m, 'label_boot',  'BOOT',  COL.CYAN) },
+  { label: 'SCAN',  desc: 'Recherche du transmetteur Dexcom en BLE',                  render: m => drawLabel(m, 'label_scan',  'SCAN',  COL.YELLOW) },
+  { label: 'FOUND', desc: 'Transmetteur Dexcom détecté, ouverture connexion',         render: m => drawLabel(m, 'label_found', 'FOUND', COL.CYAN) },
+  { label: 'CONN',  desc: 'Connexion BLE établie avec le transmetteur',               render: m => drawLabel(m, 'label_conn',  'CONN',  COL.CYAN) },
+  { label: 'AUTH',  desc: 'Authentification AES-128 en cours (challenge/réponse)',    render: m => drawLabel(m, 'label_auth',  'AUTH',  COL.MAGENTA) },
+  { label: 'BOND',  desc: 'Pairing SMP : échange/stockage des clés BLE',              render: m => drawLabel(m, 'label_bond',  'BOND',  COL.MAGENTA) },
+  { label: 'TIME',  desc: 'Récupération du timestamp du transmetteur',                render: m => drawLabel(m, 'label_time',  'TIME',  COL.WHITE) },
+  { label: 'WAIT',  desc: 'Idle entre lectures (cycle Dexcom = 5 min)',               render: m => drawLabel(m, 'label_wait',  'WAIT',  COL.ORANGE) },
+  { label: 'OFF',   desc: 'Capteur Dexcom hors du corps (pas de contact peau)',       render: m => drawLabel(m, 'label_off',   'OFF',   COL.RED) },
+  { label: 'ERR',   desc: 'Timeout ou erreur BLE (auth/bond échoué, déconnexion)',    render: m => drawLabel(m, 'label_err',   'ERR',   COL.RED) },
+  { label: '50 ↓↓ hypo sévère',   render: m => drawGlucose(m, 50,  'arrow_doubleDown') },
+  { label: '65 ↓ hypo',           render: m => drawGlucose(m, 65,  'arrow_singleDown') },
+  { label: '124 ↗ cible',         render: m => drawGlucose(m, 124, 'arrow_fortyFiveUp') },
+  { label: '180 → cible haute',   render: m => drawGlucose(m, 180, 'arrow_flat') },
+  { label: '220 ↑ hyper',         render: m => drawGlucose(m, 220, 'arrow_singleUp') },
+  { label: '302 ↑↑ hyper sévère', render: m => drawGlucose(m, 302, 'arrow_doubleUp') },
+];
+
+// Réplique displayGlucose du firmware :
+// - Si TOUS les digits utilisés (digit_0..9) sont designés → custom 5×8 centré
+// - Sinon → fallback AwtrixFont gauche + flèche droite
+function drawGlucose(matrix, mgdl, arrowName) {
+  const buf = String(mgdl);
+  const nDigits = buf.length;
+  const color = glucoseColor(mgdl);
+
+  // Check si tous les digits sont designés
+  let allCustom = true;
+  for (const ch of buf) {
+    const sprite = findSprite('digit_' + ch);
+    if (!sprite || spriteIsEmpty(sprite)) { allCustom = false; break; }
+  }
+
+  const ARROW_GAP = 0;
+  // Largeur dynamique : flèches doubles font 10×5, autres 5×5 (idem firmware)
+  const ARROW_W = (arrowName === 'arrow_doubleUp' || arrowName === 'arrow_doubleDown') ? 10 : 5;
+
+  if (allCustom) {
+    const DIGIT_W = 5;
+    const DIGIT_GAP = -1;
+    const textWidth = nDigits * DIGIT_W + (nDigits - 1) * DIGIT_GAP;
+    const totalWidth = textWidth + ARROW_GAP + ARROW_W;
+    const startX = Math.max(0, Math.floor((32 - totalWidth) / 2));
+
+    for (let i = 0; i < nDigits; i++) {
+      const sprite = findSprite('digit_' + buf[i]);
+      drawSprite(matrix, sprite, startX + i * (DIGIT_W + DIGIT_GAP), 0, color, DIGIT_W, 8);
+    }
+    drawSprite(matrix, findSprite(arrowName), startX + textWidth + ARROW_GAP, 1, COL.WHITE, ARROW_W, 5);
+  } else {
+    const textWidth = 4 * nDigits - 1;
+    const totalWidth = textWidth + ARROW_GAP + ARROW_W;
+    const startX = Math.max(0, Math.floor((32 - totalWidth) / 2));
+
+    drawText(matrix, buf, startX, 6, color, 'LEFT');
+    drawSprite(matrix, findSprite(arrowName), startX + textWidth + ARROW_GAP, 1, COL.WHITE, ARROW_W, 5);
+  }
+}
+
+function renderScreenPreviews() {
+  const container = document.getElementById('screenPreviews');
+  if (!container) return;
+  if (detectedSprites.length === 0) {
+    container.innerHTML = '<div style="opacity:0.6; font-size:12px;">Ouvre le dossier projet pour voir les aperçus.</div>';
+    return;
+  }
+  let html = '';
+  for (const sc of SCREEN_SCENARIOS) {
+    const m = createMatrix();
+    try { sc.render(m); } catch (e) { console.warn(sc.label, e); }
+    const descHtml = sc.desc
+      ? `<div style="font-size:10px; opacity:0.55; margin-top:2px; line-height:1.3;">${sc.desc}</div>`
+      : '';
+    html += `<div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:120px;">
+        <div style="font-size:11px; opacity:0.85; font-weight:600;">${sc.label}</div>
+        ${descHtml}
+      </div>
+      ${matrixToHTML(m)}
+    </div>`;
+  }
+  container.innerHTML = html;
+}
+
+function init() {
+  resizeGrid();
+  renderPalette();
+  // Tente de restaurer le dossier projet depuis IndexedDB (silencieux)
+  restoreProjectDir();
+}
+
+function resizeGrid() {
+  W = parseInt(document.getElementById('width').value);
+  H = parseInt(document.getElementById('height').value);
+  if (grid.length === 0) {
+    grid = Array.from({length: H}, () => Array(W).fill(null));
+  } else {
+    // Préserve les pixels qui rentrent
+    const newGrid = Array.from({length: H}, (_, r) =>
+      Array.from({length: W}, (_, c) => grid[r]?.[c] ?? null)
+    );
+    grid = newGrid;
+  }
+  renderGrid();
+  renderAll();
+}
+
+function renderGrid() {
+  const g = document.getElementById('grid');
+  g.style.gridTemplateColumns = `repeat(${W}, 32px)`;
+  g.innerHTML = '';
+  for (let r = 0; r < H; r++) {
+    for (let c = 0; c < W; c++) {
+      const px = document.createElement('div');
+      px.className = 'pixel';
+      const col = grid[r][c];
+      if (col) { px.classList.add('on'); px.style.background = col; }
+      px.dataset.r = r; px.dataset.c = c;
+      px.addEventListener('mousedown', e => {
+        dragMode = grid[r][c] ? 0 : 1;
+        toggle(r, c);
+      });
+      px.addEventListener('mouseenter', e => { if (e.buttons & 1) toggle(r, c, dragMode); });
+      g.appendChild(px);
+    }
+  }
+}
+
+let dragMode = 1;
+function toggle(r, c, force) {
+  // force=0 → éteint, force=1 → allumé avec pixelColor courant, undefined → toggle
+  if (force === 0) {
+    grid[r][c] = null;
+  } else if (force === 1) {
+    grid[r][c] = pixelColor;
+  } else {
+    grid[r][c] = grid[r][c] ? null : pixelColor;
+  }
+  renderAll();
+}
+
+// Clear : revient à l'état du fichier (dernier save) si on édite un sprite projet,
+// sinon tout-noir (mode standalone, pas de référence à restaurer).
+function clearGrid() {
+  if (currentSprite && currentSprite.originalBytes) {
+    grid = unpackToGrid(currentSprite, currentSprite.originalBytes);
+  } else {
+    grid = Array.from({length: H}, () => Array(W).fill(null));
+  }
+  renderGrid(); renderAll();
+}
+
+// Décompacte les bytes d'un sprite en grille 2D (color string ou null par pixel).
+function unpackToGrid(sprite, bytes) {
+  const g = [];
+  if (isColorSprite(sprite)) {
+    // RGB565 : 1 valeur par pixel, row-major
+    for (let r = 0; r < H; r++) {
+      const row = [];
+      for (let c = 0; c < W; c++) {
+        const v = bytes[r * W + c] || 0;
+        row.push(v ? rgb565ToHex(v) : null);
+      }
+      g.push(row);
+    }
+  } else {
+    const bytesPerRow = Math.ceil(W / 8);
+    for (let r = 0; r < H; r++) {
+      const row = [];
+      for (let c = 0; c < W; c++) {
+        const byteIdx = r * bytesPerRow + Math.floor(c / 8);
+        const bitIdx = 7 - (c % 8);
+        const on = ((bytes[byteIdx] || 0) >> bitIdx) & 1;
+        row.push(on ? pixelColor : null);
+      }
+      g.push(row);
+    }
+  }
+  return g;
+}
+
+function invert() {
+  grid = grid.map(row => row.map(v => v ? null : pixelColor));
+  renderGrid(); renderAll();
+}
+
+// Décale tous les pixels de (dx, dy). Les pixels qui sortent du cadre sont perdus,
+// les bords vacants sont remplis de 0.
+function shiftGrid(dx, dy) {
+  const newGrid = Array.from({length: H}, () => Array(W).fill(null));
+  for (let r = 0; r < H; r++) {
+    for (let c = 0; c < W; c++) {
+      const sr = r - dy;
+      const sc = c - dx;
+      if (sr >= 0 && sr < H && sc >= 0 && sc < W) {
+        newGrid[r][c] = grid[sr][sc];
+      }
+    }
+  }
+  grid = newGrid;
+  renderGrid(); renderAll();
+}
+
+// Détecte le bounding box des pixels allumés et les centre dans la grille.
+// Utile pour recentrer un glyphe qui a été dessiné de travers.
+function centerGrid() {
+  let minR = H, maxR = -1, minC = W, maxC = -1;
+  for (let r = 0; r < H; r++) {
+    for (let c = 0; c < W; c++) {
+      if (grid[r][c]) {
+        if (r < minR) minR = r;
+        if (r > maxR) maxR = r;
+        if (c < minC) minC = c;
+        if (c > maxC) maxC = c;
+      }
+    }
+  }
+  if (maxR < 0) return;  // grille vide
+
+  const usedW = maxC - minC + 1;
+  const usedH = maxR - minR + 1;
+  const targetMinC = Math.floor((W - usedW) / 2);
+  const targetMinR = Math.floor((H - usedH) / 2);
+  const dx = targetMinC - minC;
+  const dy = targetMinR - minR;
+  if (dx === 0 && dy === 0) return;
+  shiftGrid(dx, dy);
+}
+
+function loadPreset() {
+  const v = document.getElementById('preset').value;
+  if (v === '3x5') { document.getElementById('width').value = 3; document.getElementById('height').value = 5; }
+  else if (v === '5x5') { document.getElementById('width').value = 5; document.getElementById('height').value = 5; }
+  else if (v === '32x8') { document.getElementById('width').value = 32; document.getElementById('height').value = 8; }
+  resizeGrid();
+}
+
+// Pack la grille pour la sortie C.
+// - Sprite multi-couleur (label_*) : retourne array de uint16 RGB565 (1 par pixel).
+// - Sinon : pack en bits Adafruit GFX (ceil(W/8) octets par ligne, MSB first).
+function gridToBytes() {
+  if (isColorSprite(currentSprite)) {
+    // Multi-couleur : 1 valeur uint16 par pixel (row-major)
+    const out = [];
+    for (let r = 0; r < H; r++) {
+      for (let c = 0; c < W; c++) {
+        out.push(hexToRgb565(grid[r][c]));
+      }
+    }
+    return out;
+  }
+  // Mono : bit-packing classique
+  const bytesPerRow = Math.ceil(W / 8);
+  const bytes = [];
+  for (let r = 0; r < H; r++) {
+    for (let bx = 0; bx < bytesPerRow; bx++) {
+      let byte = 0;
+      for (let c = 0; c < 8; c++) {
+        const col = bx * 8 + c;
+        if (col < W && grid[r][col]) byte |= (1 << (7 - c));
+      }
+      bytes.push(byte);
+    }
+  }
+  return bytes;
+}
+
+function renderAll() {
+  renderC();
+  renderAscii();
+  renderPreview();
+  renderMatrix();
+  // Update grid pixels (classe + couleur inline) sans rebuild complet
+  document.querySelectorAll('#grid .pixel').forEach(px => {
+    const r = +px.dataset.r, c = +px.dataset.c;
+    const col = grid[r][c];
+    if (col) {
+      px.classList.add('on');
+      px.style.background = col;
+    } else {
+      px.classList.remove('on');
+      px.style.background = '';
+    }
+  });
+  // Live update du sprite actif dans la liste (vignette)
+  if (currentSprite) {
+    currentSprite.bytes = gridToBytes();
+    const scroll = document.getElementById('spriteList').scrollTop;
+    renderSpriteList();
+    document.getElementById('spriteList').scrollTop = scroll;
+  }
+  // Et live update des aperçus écran (utilisent les bytes courants)
+  renderScreenPreviews();
+}
+
+function renderC() {
+  const bytes = gridToBytes();
+  const isColor = isColorSprite(currentSprite);
+  const padLen = isColor ? 4 : 2;
+  const hex = bytes.map(b => '0x' + b.toString(16).toUpperCase().padStart(padLen, '0')).join(', ');
+  const cType = isColor ? 'uint16_t' : 'uint8_t';
+  const usage = isColor
+    ? `// drawColorSprite(x, y, my_sprite, ${W}, ${H});  // multi-couleur RGB565`
+    : `// DisplayManager.drawBitmap(x, y, my_sprite, ${W}, ${H}, COL_WHITE);`;
+  const out = `static const ${cType} my_sprite[] PROGMEM = {${hex}};\n\n` + usage;
+  document.getElementById('cOutput').textContent = out;
+}
+
+function renderAscii() {
+  const out = grid.map(row =>
+    row.map(v => v ? '█' : '░').join('')
+  ).join('\n');
+  document.getElementById('asciiOutput').textContent = out;
+}
+
+function renderPreview() {
+  const p = document.getElementById('preview');
+  p.style.gridTemplateColumns = `repeat(${W}, 6px)`;
+  p.innerHTML = '';
+  for (let r = 0; r < H; r++) {
+    for (let c = 0; c < W; c++) {
+      const px = document.createElement('div');
+      px.className = 'pixel';
+      if (grid[r][c]) { px.classList.add('on'); px.style.background = grid[r][c]; }
+      p.appendChild(px);
+    }
+  }
+}
+
+function renderMatrix() {
+  const m = document.getElementById('matrix');
+  const px_x = parseInt(document.getElementById('px').value);
+  const py_y = parseInt(document.getElementById('py').value);
+  m.innerHTML = '';
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 32; c++) {
+      const px = document.createElement('div');
+      px.className = 'pixel';
+      const sr = r - py_y, sc = c - px_x;
+      if (sr >= 0 && sr < H && sc >= 0 && sc < W && grid[sr][sc]) {
+        px.classList.add('on');
+        px.style.background = grid[sr][sc];
+      }
+      m.appendChild(px);
+    }
+  }
+}
+
+function importHex() {
+  const txt = document.getElementById('hexInput').value;
+  const w = parseInt(document.getElementById('importWidth').value);
+  // Extract all numbers (hex 0xNN or decimal)
+  const matches = [...txt.matchAll(/0x([0-9a-fA-F]+)|(\d+)/g)];
+  const bytes = matches.map(m => parseInt(m[0], m[0].startsWith('0x') ? 16 : 10));
+  if (bytes.length === 0) { alert('Aucun byte trouvé'); return; }
+
+  W = w;
+  H = bytes.length;
+  document.getElementById('width').value = W;
+  document.getElementById('height').value = H;
+  grid = bytes.map(b => {
+    const row = [];
+    for (let c = 0; c < W; c++) {
+      row.push(((b >> (7 - c)) & 1) ? pixelColor : null);
+    }
+    return row;
+  });
+  renderGrid(); renderAll();
+}
+
+function importAscii() {
+  const txt = document.getElementById('asciiInput').value.trim();
+  const lines = txt.split('\n').map(l => l.trimEnd()).filter(l => l.length > 0);
+  if (lines.length === 0) { alert('Aucune ligne'); return; }
+  const w = Math.max(...lines.map(l => [...l].length));
+  const h = lines.length;
+  W = w; H = h;
+  document.getElementById('width').value = W;
+  document.getElementById('height').value = H;
+  const onChars = new Set(['█', 'X', 'x', '#', '1', '*']);
+  grid = lines.map(line => {
+    const chars = [...line];
+    const row = [];
+    for (let c = 0; c < W; c++) {
+      row.push(onChars.has(chars[c]) ? pixelColor : null);
+    }
+    return row;
+  });
+  renderGrid(); renderAll();
+}
+
+function copy(id) {
+  navigator.clipboard.writeText(document.getElementById(id).textContent);
+}
+
+document.getElementById('px').addEventListener('input', renderMatrix);
+document.getElementById('py').addEventListener('input', renderMatrix);
+
+init();
+</script>
+
+</body>
+</html>

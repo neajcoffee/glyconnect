@@ -4,6 +4,7 @@
 #include <LCBUrl.h>
 #include <StreamUtils.h>
 
+#include "ServerManager.h"
 #include "SettingsManager.h"
 
 std::list<GlucoseReading> BGSourceDexcom::updateReadings(std::list<GlucoseReading> existingReadings) {

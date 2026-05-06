@@ -1,6 +1,7 @@
 #include "BGDisplayFaceValueAndDiff.h"
 
 #include "BGDisplayManager.h"
+#include "ServerManager.h"
 #include "globals.h"
 
 void BGDisplayFaceValueAndDiff::showReadings(

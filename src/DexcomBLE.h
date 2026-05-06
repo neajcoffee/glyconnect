@@ -4,13 +4,11 @@
 #include <mbedtls/aes.h>
 #include <functional>
 
-// ─── UUIDs ───────────────────────────────────────────────────────────────────
 #define DEXCOM_ADV_UUID       "febc"
 #define DEXCOM_SVC_UUID       "f8083532-849e-531c-c594-30f1f86a4ea5"
 #define DEXCOM_AUTH_UUID      "f8083535-849e-531c-c594-30f1f86a4ea5"
 #define DEXCOM_CONTROL_UUID   "f8083534-849e-531c-c594-30f1f86a4ea5"
 
-// ─── Opcodes ─────────────────────────────────────────────────────────────────
 #define OP_AUTH_REQ_TX    0x01
 #define OP_AUTH_REQ_RX    0x03
 #define OP_AUTH_CHAL_TX   0x04
@@ -23,63 +21,68 @@
 #define OP_GLUCOSE_TX     0x4E
 #define OP_GLUCOSE_RX     0x4F
 
-#define SENSOR_LIFE_SEC   (10UL * 24 * 3600)
-
-// ─── Structures ──────────────────────────────────────────────────────────────
 struct DexcomReading {
     uint16_t mgdl       = 0;
     float    mmol       = 0.0f;
-    int8_t   trend      = 0;     // mg/dL/min * 0.1 (signé)
+    int8_t   trend      = 0;
     bool     sensorOk   = false;
     uint16_t predicted  = 0;
-    uint32_t sensorAge  = 0;     // secondes depuis insertion
-    unsigned long rxMs  = 0;     // millis() à la réception
+    uint32_t sensorAge  = 0;
+    unsigned long rxMs  = 0;
 };
 
-// ─── Callbacks ───────────────────────────────────────────────────────────────
 using DexcomReadingCb = std::function<void(const DexcomReading&)>;
 using DexcomStateCb   = std::function<void(const String&)>;
 
-// ─── Classe principale ───────────────────────────────────────────────────────
 class DexcomBLE {
 public:
     explicit DexcomBLE(const String& transmitterId);
-
     void begin(DexcomReadingCb onReading, DexcomStateCb onState = nullptr);
-    void tick();  // à appeler dans loop()
+    void tick();
+
+    void stopScan() { if (pScan) pScan->stop(); }
+
+    String getStateName() const {
+        static const char* names[] = {
+            "IDLE","SCANNING","CONNECTING","AUTH_REQ","AUTH_CHAL",
+            "AUTH_BOND","TIME_REQ","GLUCOSE_REQ","READING_DONE","WAIT_NEXT"
+        };
+        return names[(int)state];
+    }
+
+    bool isWaiting() const {
+        if (state == State::WAIT_NEXT) return true;
+        if (state == State::SCANNING && !deviceFound && millis() - stateMs > 30000) return true;
+        return false;
+    }
 
 private:
-    // ── Config ──
     String  txId;
-    String  targetName;   // "DexcomXX"
+    String  targetName;
     uint8_t cryptoKey[16];
 
-    // ── Callbacks ──
     DexcomReadingCb cbReading;
     DexcomStateCb   cbState;
 
-    // ── BLE ──
     NimBLEClient*               pClient      = nullptr;
     NimBLERemoteCharacteristic* authChar     = nullptr;
     NimBLERemoteCharacteristic* controlChar  = nullptr;
 
-    // ── Machine à états ──
     enum class State { IDLE, SCANNING, CONNECTING, AUTH_REQ, AUTH_CHAL, AUTH_BOND,
                        TIME_REQ, GLUCOSE_REQ, READING_DONE, WAIT_NEXT };
     State   state        = State::IDLE;
-    unsigned long stateMs = 0;   // millis() entrée dans l'état courant
+    unsigned long stateMs = 0;
 
     bool    bonded       = false;
     uint8_t token[8]     = {};
     DexcomReading lastReading;
 
-    // ── Scan ──
-    NimBLEScan*          pScan    = nullptr;
-    NimBLEAdvertisedDevice* foundDevice = nullptr;
+    NimBLEScan*    pScan        = nullptr;
+    bool           deviceFound  = false;
+    NimBLEAddress  foundAddress;
+    NimBLEAddress  altAddress;
 
     void setState(State s);
-
-    // ── Étapes protocole ──
     void startScan();
     bool connect();
     bool discoverChars();
@@ -90,11 +93,9 @@ private:
     void handleBondRx(const uint8_t* d, size_t len);
     void sendTimeRequest();
     void handleTimeRx(const uint8_t* d, size_t len);
-    void sendGlucoseRequest();
     void handleGlucoseRx(const uint8_t* d, size_t len);
     void disconnect();
 
-    // ── Crypto ──
     void    buildCryptoKey();
     void    aes128ecb(const uint8_t* in16, uint8_t* out16) const;
     void    computeResponse(const uint8_t* challenge, uint8_t* out8) const;
@@ -103,9 +104,16 @@ private:
 
     void emit(const String& s) { if (cbState) cbState(s); }
 
-    // ── Callbacks BLE statiques (NimBLE exige pointeurs de fonction) ──
     static DexcomBLE* _instance;
     static void onAuthNotify(NimBLERemoteCharacteristic*, uint8_t*, size_t, bool);
     static void onControlNotify(NimBLERemoteCharacteristic*, uint8_t*, size_t, bool);
-    static void onScanResult(NimBLEAdvertisedDevice*);
+
+    class ScanCallbacks : public NimBLEAdvertisedDeviceCallbacks {
+    public:
+        ScanCallbacks(DexcomBLE* p) : parent(p) {}
+        void onResult(NimBLEAdvertisedDevice* adv) override;
+    private:
+        DexcomBLE* parent;
+    };
+    ScanCallbacks* scanCbs = nullptr;
 };

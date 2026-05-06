@@ -3,6 +3,8 @@
 #include <Arduino.h>
 #include <AsyncJson.h>
 
+#include "ServerManager.h"
+
 #define TIMESTAMP_FIELD "FactoryTimestamp"
 
 bool BGSourceLibreLinkUp::hasValidAuthentication() {

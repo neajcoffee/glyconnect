@@ -3,7 +3,6 @@
 
 DexcomBLE* DexcomBLE::_instance = nullptr;
 
-// ─── CRC-16-CCITT (poly=0x1021, init=0x0000, résultat LE) ───────────────────
 static const uint16_t CRC16_TABLE[256] = {
     0x0000,0x1021,0x2042,0x3063,0x4084,0x50A5,0x60C6,0x70E7,
     0x8108,0x9129,0xA14A,0xB16B,0xC18C,0xD1AD,0xE1CE,0xF1EF,
@@ -39,7 +38,6 @@ static const uint16_t CRC16_TABLE[256] = {
     0x6E17,0x7E36,0x4E55,0x5E74,0x2E93,0x3EB2,0x0ED1,0x1EF0,
 };
 
-// ─── Constructeur ─────────────────────────────────────────────────────────────
 DexcomBLE::DexcomBLE(const String& transmitterId) : txId(transmitterId) {
     txId.toUpperCase();
     targetName = "Dexcom" + txId.substring(txId.length() - 2);
@@ -47,14 +45,12 @@ DexcomBLE::DexcomBLE(const String& transmitterId) : txId(transmitterId) {
     _instance = this;
 }
 
-// ─── Clé AES : "00" + id + "00" + id (UTF-8) ─────────────────────────────────
 void DexcomBLE::buildCryptoKey() {
     String keyStr = "00" + txId + "00" + txId;
     for (int i = 0; i < 16 && i < (int)keyStr.length(); i++)
         cryptoKey[i] = (uint8_t)keyStr[i];
 }
 
-// ─── AES-128-ECB ─────────────────────────────────────────────────────────────
 void DexcomBLE::aes128ecb(const uint8_t* in16, uint8_t* out16) const {
     mbedtls_aes_context ctx;
     mbedtls_aes_init(&ctx);
@@ -71,7 +67,6 @@ void DexcomBLE::computeResponse(const uint8_t* challenge, uint8_t* out8) const {
     memcpy(out8, output, 8);
 }
 
-// ─── CRC-16 ──────────────────────────────────────────────────────────────────
 uint16_t DexcomBLE::crc16(const uint8_t* data, size_t len) const {
     uint16_t crc = 0x0000;
     for (size_t i = 0; i < len; i++)
@@ -86,16 +81,23 @@ void DexcomBLE::makeG6Msg(uint8_t opcode, uint8_t* out3) const {
     out3[2] = (c >> 8) & 0xFF;
 }
 
-// ─── begin() ─────────────────────────────────────────────────────────────────
+static void hexLog(const char* label, const uint8_t* d, size_t len) {
+    Serial.printf("[BLE] %s (%u bytes) : ", label, len);
+    for (size_t i = 0; i < len; i++) Serial.printf("%02X ", d[i]);
+    Serial.println();
+}
+
 void DexcomBLE::begin(DexcomReadingCb onReading, DexcomStateCb onState) {
     cbReading = onReading;
     cbState   = onState;
 
     NimBLEDevice::init("");
     NimBLEDevice::setPower(ESP_PWR_LVL_P9);
+    NimBLEDevice::setSecurityAuth(false, false, false);
 
-    pScan = NimBLEDevice::getScan();
-    pScan->setScanCallbacks(nullptr, false);
+    pScan   = NimBLEDevice::getScan();
+    scanCbs = new ScanCallbacks(this);
+    pScan->setAdvertisedDeviceCallbacks(scanCbs, false);
     pScan->setActiveScan(true);
     pScan->setInterval(100);
     pScan->setWindow(99);
@@ -103,102 +105,105 @@ void DexcomBLE::begin(DexcomReadingCb onReading, DexcomStateCb onState) {
     startScan();
 }
 
-// ─── Scan ─────────────────────────────────────────────────────────────────────
-void DexcomBLE::startScan() {
-    foundDevice = nullptr;
-    setState(State::SCANNING);
-    emit("SCAN...");
-    pScan->clearResults();
-    pScan->start(0, false); // scan continu
-}
-
-void DexcomBLE::onScanResult(NimBLEAdvertisedDevice* adv) {
-    if (!_instance) return;
-    String name = adv->getName().c_str();
-    auto   uuids = adv->getServiceUUIDs();
-    bool hasFebc = false;
-    for (int i = 0; i < (int)uuids.size(); i++)
-        if (String(uuids[i].toString().c_str()).indexOf("febc") >= 0) { hasFebc = true; break; }
-
-    if (name == _instance->targetName || hasFebc) {
-        _instance->pScan->stop();
-        _instance->foundDevice = adv;
-    }
-}
-
-// ─── setState() ──────────────────────────────────────────────────────────────
 void DexcomBLE::setState(State s) {
+    static const char* names[] = {
+        "IDLE","SCANNING","CONNECTING","AUTH_REQ","AUTH_CHAL",
+        "AUTH_BOND","TIME_REQ","GLUCOSE_REQ","READING_DONE","WAIT_NEXT"
+    };
+    Serial.printf("[STATE] %s → %s\n", names[(int)state], names[(int)s]);
     state   = s;
     stateMs = millis();
 }
 
-// ─── tick() — appelé dans loop() ─────────────────────────────────────────────
+void DexcomBLE::startScan() {
+    deviceFound = false;
+    setState(State::SCANNING);
+    emit("SCAN...");
+    pScan->clearResults();
+    pScan->start(0, false);
+}
+
+void DexcomBLE::ScanCallbacks::onResult(NimBLEAdvertisedDevice* adv) {
+    String name    = adv->getName().c_str();
+    bool   hasFebc = adv->isAdvertisingService(NimBLEUUID("febc"));
+    bool   nameOk  = (name == parent->targetName);
+
+    if (!name.isEmpty() || hasFebc)
+        Serial.printf("[SCAN] \"%s\" %s febc=%d\n", name.c_str(), adv->getAddress().toString().c_str(), hasFebc);
+
+    if (nameOk || hasFebc) {
+        if (adv->getAdvType() == 1) { Serial.println("[SCAN] Directed — on attend"); return; }
+
+        parent->foundAddress = adv->getAddress();
+        String s = parent->foundAddress.toString().c_str();
+        int lb = (int)strtol(s.substring(15).c_str(), nullptr, 16);
+        char altStr[18];
+        snprintf(altStr, sizeof(altStr), "%s%02x", s.substring(0, 15).c_str(), (lb + 1) & 0xFF);
+        parent->altAddress = NimBLEAddress(altStr, BLE_ADDR_RANDOM);
+
+        Serial.printf("[SCAN] Primaire: %s  Alt: %s\n",
+            parent->foundAddress.toString().c_str(), parent->altAddress.toString().c_str());
+
+        parent->deviceFound = true;
+        parent->pScan->stop();
+    }
+}
+
 void DexcomBLE::tick() {
     unsigned long now = millis();
-
     switch (state) {
     case State::SCANNING:
-        if (foundDevice) {
-            setState(State::CONNECTING);
-        }
-        // Timeout 90s → relancer
-        if (now - stateMs > 90000 && !foundDevice) {
-            pScan->stop();
-            startScan();
-        }
+        if (deviceFound) setState(State::CONNECTING);
+        if (now - stateMs > 90000 && !deviceFound) { pScan->stop(); startScan(); }
         break;
-
     case State::CONNECTING:
+        if (now - stateMs < 500) break;
         if (connect()) {
-            sendAuthRequest();
+            // Le transmetteur peut avoir envoyé [0x03] pendant connect()
+            // → state déjà passé à AUTH_CHAL dans handleAuthRx
+            if (state == State::CONNECTING) sendAuthRequest();
         } else {
-            emit("ERR CONNECT");
-            startScan();
+            emit("ATTENTE..."); setState(State::WAIT_NEXT);
         }
         break;
-
     case State::AUTH_REQ:
     case State::AUTH_CHAL:
     case State::AUTH_BOND:
     case State::TIME_REQ:
     case State::GLUCOSE_REQ:
-        // Timeout 10s → déconnexion et rescan
-        if (now - stateMs > 10000) {
-            emit("TIMEOUT");
-            disconnect();
-            delay(2000);
-            startScan();
-        }
+        if (now - stateMs > 10000) { emit("TIMEOUT"); disconnect(); delay(2000); startScan(); }
         break;
-
     case State::READING_DONE:
-        disconnect();
-        setState(State::WAIT_NEXT);
-        emit("OK");
+        disconnect(); setState(State::WAIT_NEXT); emit("OK");
         break;
-
     case State::WAIT_NEXT:
-        if (now - stateMs > 10000) startScan();
+        if (now - stateMs > 30000) startScan();
         break;
-
     default: break;
     }
 }
 
-// ─── Connexion ───────────────────────────────────────────────────────────────
 bool DexcomBLE::connect() {
     emit("CONNECT");
-    if (!pClient) {
-        pClient = NimBLEDevice::createClient();
-        pClient->setConnectionParams(12, 12, 0, 51);
-        pClient->setTimeout(10);
+    if (pClient) { NimBLEDevice::deleteClient(pClient); pClient = nullptr; }
+    pClient = NimBLEDevice::createClient();
+    pClient->setConnectTimeout(10);
+
+    NimBLEAddress addrs[2] = {
+        NimBLEAddress(foundAddress.toString(), BLE_ADDR_RANDOM),
+        altAddress
+    };
+    for (int i = 0; i < 2; i++) {
+        String addr = addrs[i].toString().c_str();
+        emit("CONN " + String(i+1) + "/2 " + addr.substring(15));
+        if (pClient->connect(addrs[i])) {
+            emit("CONNECTED " + addr.substring(15));
+            if (discoverChars()) return true;
+            return false;
+        }
+        emit("CONN FAIL " + String(i+1));
     }
-
-    if (!pClient->connect(foundDevice)) return false;
-    if (!discoverChars())              return false;
-
-    setState(State::CONNECTING);
-    return true;
+    return false;
 }
 
 bool DexcomBLE::discoverChars() {
@@ -207,99 +212,91 @@ bool DexcomBLE::discoverChars() {
 
     authChar    = svc->getCharacteristic(DEXCOM_AUTH_UUID);
     controlChar = svc->getCharacteristic(DEXCOM_CONTROL_UUID);
-
     if (!authChar || !controlChar) { emit("NO CHAR"); return false; }
 
-    authChar->subscribe(true, onAuthNotify, true);    // indications
-    controlChar->subscribe(true, onControlNotify, true);
-    return true;
+    bool notify = authChar->canNotify();
+    bool r = authChar->subscribe(notify, onAuthNotify, true);
+    Serial.printf("[BLE] Subscribe authChar notify=%d → %d\n", notify, r);
+    return r;
 }
 
-// ─── Auth — Étape 1 ──────────────────────────────────────────────────────────
 void DexcomBLE::sendAuthRequest() {
     esp_fill_random(token, 8);
     uint8_t msg[10];
     msg[0] = OP_AUTH_REQ_TX;
     memcpy(msg + 1, token, 8);
-    msg[9] = 0x01;  // end byte G6
-    authChar->writeValue(msg, 10, false);
+    msg[9] = 0x01;
+    hexLog("→ AuthRequestTx", msg, 10);
+    authChar->writeValue(msg, 10, true);
     setState(State::AUTH_REQ);
     emit("AUTH...");
 }
 
-// ─── Auth — callback indications f8083535 ────────────────────────────────────
-void DexcomBLE::onAuthNotify(NimBLERemoteCharacteristic*, uint8_t* data, size_t len, bool isNotify) {
+void DexcomBLE::onAuthNotify(NimBLERemoteCharacteristic*, uint8_t* data, size_t len, bool) {
     if (!_instance || len < 1) return;
     _instance->handleAuthRx(data, len);
 }
 
 void DexcomBLE::handleAuthRx(const uint8_t* d, size_t len) {
-    if (d[0] == OP_AUTH_REQ_RX && len >= 17 && state == State::AUTH_REQ) {
-        // Vérification token hash (optionnelle)
-        // d[1..8] = hash de notre token
-        // d[9..16] = challenge
+    hexLog("← Auth RX", d, len);
+    // Accepte [0x03] en CONNECTING : le transmetteur envoie le challenge
+    // dès la subscription CCCD, avant qu'on envoie [0x01]
+    if (d[0] == OP_AUTH_REQ_RX && len >= 17 &&
+        (state == State::AUTH_REQ || state == State::CONNECTING)) {
+        emit("AUTH CHALLENGE recu");
         uint8_t response[8];
         computeResponse(d + 9, response);
-
-        uint8_t msg[9];
-        msg[0] = OP_AUTH_CHAL_TX;
+        uint8_t msg[9]; msg[0] = OP_AUTH_CHAL_TX;
         memcpy(msg + 1, response, 8);
-        authChar->writeValue(msg, 9, false);
+        authChar->writeValue(msg, 9, true);
+        emit("AUTH RESPONSE envoyee");
         setState(State::AUTH_CHAL);
     }
     else if (d[0] == OP_AUTH_CHAL_RX && len >= 3 && state == State::AUTH_CHAL) {
+        emit("AUTH STATUS auth=" + String(d[1]) + " bond=" + String(d[2]));
         handleAuthStatus(d, len);
     }
     else if (d[0] == OP_BOND_RX && state == State::AUTH_BOND) {
+        emit("BOND RX status=" + String(len > 1 ? d[1] : 0xFF));
         handleBondRx(d, len);
+    }
+    else {
+        emit("AUTH ERR op=0x" + String(d[0], HEX));
     }
 }
 
 void DexcomBLE::handleAuthStatus(const uint8_t* d, size_t len) {
     bool authenticated = (d[1] == 0x01);
     bonded             = (d[2] == 0x01);
-
     if (!authenticated) { emit("AUTH FAIL"); disconnect(); startScan(); return; }
-
-    if (!bonded) {
-        sendBondRequest();
-    } else {
-        sendTimeRequest();
-    }
+    if (!bonded) sendBondRequest();
+    else sendTimeRequest();
 }
 
-// ─── Bond ────────────────────────────────────────────────────────────────────
 void DexcomBLE::sendBondRequest() {
     uint8_t ka[2] = { OP_KEEPALIVE, 25 };
-    authChar->writeValue(ka, 2, false);
+    authChar->writeValue(ka, 2, true);
     uint8_t br[1] = { OP_BOND_REQ };
-    authChar->writeValue(br, 1, false);
+    authChar->writeValue(br, 1, true);
     setState(State::AUTH_BOND);
     emit("BOND...");
 }
 
 void DexcomBLE::handleBondRx(const uint8_t* d, size_t len) {
     bonded = true;
+    emit("BOND OK");
     sendTimeRequest();
 }
 
-// ─── TransmitterTime ─────────────────────────────────────────────────────────
 void DexcomBLE::sendTimeRequest() {
+    bool notifyCtrl = controlChar->canNotify();
+    controlChar->subscribe(notifyCtrl, onControlNotify, true);
     uint8_t msg[3];
     makeG6Msg(OP_TIME_TX, msg);
-    controlChar->writeValue(msg, 3, false);
+    controlChar->writeValue(msg, 3, true);
     setState(State::TIME_REQ);
 }
 
-// ─── Glucose ─────────────────────────────────────────────────────────────────
-void DexcomBLE::sendGlucoseRequest() {
-    uint8_t msg[3];
-    makeG6Msg(OP_GLUCOSE_TX, msg);
-    controlChar->writeValue(msg, 3, false);
-    setState(State::GLUCOSE_REQ);
-}
-
-// ─── Callback control (f8083534) ─────────────────────────────────────────────
 void DexcomBLE::onControlNotify(NimBLERemoteCharacteristic*, uint8_t* data, size_t len, bool) {
     if (!_instance || len < 1) return;
     _instance->handleTimeRx(data, len);
@@ -307,10 +304,14 @@ void DexcomBLE::onControlNotify(NimBLERemoteCharacteristic*, uint8_t* data, size
 
 void DexcomBLE::handleTimeRx(const uint8_t* d, size_t len) {
     if (d[0] == OP_TIME_RX && len >= 10 && state == State::TIME_REQ) {
-        uint32_t currentTime  = (uint32_t)d[2] | ((uint32_t)d[3]<<8) | ((uint32_t)d[4]<<16) | ((uint32_t)d[5]<<24);
-        uint32_t sessionStart = (uint32_t)d[6] | ((uint32_t)d[7]<<8) | ((uint32_t)d[8]<<16) | ((uint32_t)d[9]<<24);
-        lastReading.sensorAge = (currentTime > sessionStart) ? (currentTime - sessionStart) : 0;
-        sendGlucoseRequest();
+        uint32_t cur  = (uint32_t)d[2]|((uint32_t)d[3]<<8)|((uint32_t)d[4]<<16)|((uint32_t)d[5]<<24);
+        uint32_t sess = (uint32_t)d[6]|((uint32_t)d[7]<<8)|((uint32_t)d[8]<<16)|((uint32_t)d[9]<<24);
+        lastReading.sensorAge = (cur > sess) ? (cur - sess) : 0;
+        emit("TIME OK " + String(lastReading.sensorAge/3600) + "h");
+        uint8_t msg[3];
+        makeG6Msg(OP_GLUCOSE_TX, msg);
+        controlChar->writeValue(msg, 3, true);
+        setState(State::GLUCOSE_REQ);
     }
     else if (d[0] == OP_GLUCOSE_RX && len >= 14 && state == State::GLUCOSE_REQ) {
         handleGlucoseRx(d, len);
@@ -318,25 +319,21 @@ void DexcomBLE::handleTimeRx(const uint8_t* d, size_t len) {
 }
 
 void DexcomBLE::handleGlucoseRx(const uint8_t* d, size_t len) {
-    uint8_t  st    = d[1];
-    uint16_t gRaw  = (uint16_t)d[10] | ((uint16_t)d[11] << 8);
-    uint16_t mgdl  = gRaw & 0x0FFF;
-    uint8_t  state_ = d[12];
+    uint16_t mgdl  = ((uint16_t)d[10] | ((uint16_t)d[11] << 8)) & 0x0FFF;
     int8_t   trend = (int8_t)d[13];
+    uint16_t pred  = (len >= 16) ? ((uint16_t)d[14] | ((uint16_t)d[15] << 8)) & 0x03FF : 0;
 
-    lastReading.mgdl     = mgdl;
-    lastReading.mmol     = (float)mgdl / 18.01559f;
-    lastReading.trend    = (trend == 0x7F) ? 0 : trend;
-    lastReading.sensorOk = (state_ == 0x06);
-    lastReading.predicted= (len >= 16) ? ((uint16_t)d[14] | ((uint16_t)d[15] << 8)) & 0x03FF : 0;
-    lastReading.rxMs     = millis();
+    lastReading.mgdl      = mgdl;
+    lastReading.mmol      = mgdl / 18.01559f;
+    lastReading.trend     = (trend == 0x7F) ? 0 : trend;
+    lastReading.sensorOk  = (d[12] == 0x06);
+    lastReading.predicted = pred;
+    lastReading.rxMs      = millis();
 
     setState(State::READING_DONE);
-
     if (cbReading) cbReading(lastReading);
 }
 
-// ─── Déconnexion ─────────────────────────────────────────────────────────────
 void DexcomBLE::disconnect() {
     if (pClient && pClient->isConnected()) pClient->disconnect();
     bonded = false;
