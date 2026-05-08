@@ -84,12 +84,36 @@ static const uint8_t BRIGHTNESS_LEVELS_N   = sizeof(BRIGHTNESS_LEVELS);
 static int8_t  brightnessLevel = 2;          // default niveau médian (= 128)
 static uint8_t brightness      = 128;
 
+// Couleur grise pour les tirets et les digits "périmés" (>20 min).
+// Tri-mode selon brightness — physique : pixel_visible = color * brightness / 255
+// doit être >= 1 (sinon LED éteinte).
+//   - brightness >= 32 (levels 2,3,4) : 0x4208 (#404040) — discret
+//   - brightness >= 8  (level  1)     : 0x8410 (#808080) — plus clair
+//   - brightness <  8  (level  0)     : 0xFFFF (#FFFFFF) — seul le blanc pur
+//     est perceptible à brightness=1 (255*1/255 = 1 PWM minimum).
+// Toujours équilibré R8=G8=B8 → vrai gris, jamais teinté vert/rouge.
+static uint16_t ageGreyFixed() {
+    if (brightness >= 32) return 0x4208;  // #404040
+    if (brightness >= 8)  return 0x8410;  // #808080
+    return 0xFFFF;                         // #FFFFFF
+}
+
 // Forward decls : utilisés par les handlers boutons définis plus bas dans ce fichier.
 static bool     g_displayOff       = false;
 static bool     hasGlucose         = false;
 static uint16_t lastGlucoseMgdl    = 0;
 static int8_t   lastGlucoseTrend   = 0;
+static uint32_t lastGlucoseRxMs    = 0;   // millis() de la dernière lecture
+static int      g_lastBarsCount    = -1;  // dernière count de tirets dessinés
+static uint32_t g_simAgeOffsetMs   = 0;   // offset simulé pour TEST_AGE_CYCLE
 static void     displayGlucose(uint16_t mgdl, int8_t trend);
+static void     drawAgeBars();
+
+// Calcule l'âge effectif de la lecture (avec offset simulé pour test)
+static uint32_t glucoseElapsedMs() {
+    if (lastGlucoseRxMs == 0) return g_simAgeOffsetMs;
+    return (millis() - lastGlucoseRxMs) + g_simAgeOffsetMs;
+}
 
 static void saveBrightness() {
     Preferences prefs;
@@ -122,6 +146,8 @@ static void handleBtnLeft() {
     brightness = BRIGHTNESS_LEVELS[brightnessLevel];
     DisplayManager.setBrightness(brightness);
     saveBrightness();
+    // Re-render pour appliquer la couleur grise selon la nouvelle brightness
+    if (hasGlucose && !g_displayOff) displayGlucose(lastGlucoseMgdl, lastGlucoseTrend);
     char buf[40];
     snprintf(buf, sizeof(buf), "[BTN-L] level=%d brightness=%u", (int)brightnessLevel, (unsigned)brightness);
     remoteLog(buf);
@@ -132,6 +158,8 @@ static void handleBtnRight() {
     brightness = BRIGHTNESS_LEVELS[brightnessLevel];
     DisplayManager.setBrightness(brightness);
     saveBrightness();
+    // Re-render pour appliquer la couleur grise selon la nouvelle brightness
+    if (hasGlucose && !g_displayOff) displayGlucose(lastGlucoseMgdl, lastGlucoseTrend);
     char buf[40];
     snprintf(buf, sizeof(buf), "[BTN-R] level=%d brightness=%u", (int)brightnessLevel, (unsigned)brightness);
     remoteLog(buf);
@@ -352,7 +380,11 @@ static void displayGlucose(uint16_t mgdl, int8_t trend) {
     char buf[6];
     snprintf(buf, sizeof(buf), "%u", mgdl);
     int nDigits = strlen(buf);
-    uint16_t color = glucoseColorMgdl(mgdl);
+    // Couleur dépend de l'âge : >20 min → tout en gris fixe uniforme.
+    uint32_t age_min = glucoseElapsedMs() / 60000UL;
+    bool aged = (age_min >= 20);
+    uint16_t color      = aged ? ageGreyFixed() : glucoseColorMgdl(mgdl);
+    uint16_t arrowColor = aged ? ageGreyFixed() : COL_WHITE;
 
     // Vérifie si tous les digits utilisés dans cette valeur sont designés
     bool allCustom = true;
@@ -383,7 +415,7 @@ static void displayGlucose(uint16_t mgdl, int8_t trend) {
                                        DIGITS[d], DIGIT_W, 8, color);
         }
         DisplayManager.drawBitmap(startX + textWidth + ARROW_GAP, 1,
-                                   arr.bitmap, arr.width, 5, COL_WHITE);
+                                   arr.bitmap, arr.width, 5, arrowColor);
     } else {
         // Fallback AwtrixFont (3×5) : aussi centré, même logique
         // Largeur visible : N × xAdvance(4) - 1 trailing = 4N - 1
@@ -395,9 +427,37 @@ static void displayGlucose(uint16_t mgdl, int8_t trend) {
         DisplayManager.setTextColor(color);
         DisplayManager.printText(startX, 6, buf, TEXT_ALIGNMENT::LEFT, 1);
         DisplayManager.drawBitmap(startX + textWidth + ARROW_GAP, 1,
-                                   arr.bitmap, arr.width, 5, COL_WHITE);
+                                   arr.bitmap, arr.width, 5, arrowColor);
     }
+    drawAgeBars();   // tirets row 6 (avant-dernière ligne) : 1 par 5 min écoulées
     DisplayManager.update();
+}
+
+// Indicateur d'âge : 5 tirets max sur la rangée 7 (dernière ligne), 1 tiret
+// par tranche de 5 min écoulée. Plafond fixe à 5 tirets (au-delà de 25 min).
+// Layout : tirets 3 pixels + 1 pixel d'espace = 4 px par bar.
+//   5×4 - 1 trailing = 19 cols → centrage : (32-19)/2 = 6 → start x=6.
+// Couleur gris foncé uniforme (#404040) — même teinte que les digits/flèche grisés.
+static void drawAgeBars() {
+#ifndef TEST_AGE_CYCLE
+    if (!hasGlucose || lastGlucoseRxMs == 0) return;
+#else
+    if (!hasGlucose) return;
+#endif
+    uint32_t elapsed = glucoseElapsedMs();
+    int bars = (int)(elapsed / (5UL * 60UL * 1000UL));
+    if (bars > 5) bars = 5;  // plafond à 5 tirets fixes
+    const uint16_t BAR_COLOR = ageGreyFixed();  // gris fixe (même que digits grisés)
+    // Effacer row 7
+    for (int x = 0; x < MATRIX_WIDTH; x++) DisplayManager.drawPixel(x, 7, COL_BLACK);
+    // 5 tirets de 3 px + 1 px d'espace, centrés (start x=6, total 19 cols)
+    for (int b = 0; b < bars; b++) {
+        int x0 = 6 + b * 4;  // 3 px tiret + 1 px espace
+        DisplayManager.drawPixel(x0,     7, BAR_COLOR);
+        DisplayManager.drawPixel(x0 + 1, 7, BAR_COLOR);
+        DisplayManager.drawPixel(x0 + 2, 7, BAR_COLOR);
+    }
+    g_lastBarsCount = bars;
 }
 
 // Re-render la dernière glycémie (utile après un check OTA qui a pu corrompre la matrice)
@@ -760,7 +820,10 @@ static void devOtaPoll() {
     client.stop();
     delay(200);
 #ifdef USE_NIMBLE
-    NimBLEDevice::deinit(true);
+    // NimBLE consomme déjà peu (~100KB libres au boot vs Bluedroid 33KB), pas
+    // besoin de deinit. NimBLEDevice::deinit(true) crash avec
+    // "assert failed: npl_freertos_mutex_pend" (bug NimBLE-Arduino 1.4.x) →
+    // on skip et on garde juste le stopScan() au-dessus.
 #else
     BLEDevice::deinit(true);
 #endif
@@ -1033,6 +1096,8 @@ void loop() {
             hasGlucose       = true;
             lastGlucoseMgdl  = r.mgdl;
             lastGlucoseTrend = r.trend;
+            lastGlucoseRxMs  = millis();   // reset timer âge → 0 tiret au redraw
+            g_lastBarsCount  = 0;
             if (!g_displayOff) displayGlucose(r.mgdl, r.trend);
         }
         publishGlucose(r);  // continue de publier même écran OFF
@@ -1130,6 +1195,45 @@ void loop() {
 
     // Boutons : ISR détecte + buttonProcessTask exécute (core 1, prio 10).
     // setBrightness() applique directement, pas de feedback texte ni restauration.
+
+    // Indicateur d'âge : check toutes les 30s. Ajoute un tiret quand 5 min de
+    // plus se sont écoulées. À 20 min on déclenche un re-render full pour passer
+    // la valeur en gris.
+    static uint32_t lastBarCheckMs = 0;
+    if (hasGlucose && !g_displayOff && lastGlucoseRxMs > 0
+        && (now - lastBarCheckMs > 30000)) {
+        lastBarCheckMs = now;
+        uint32_t age_min = (now - lastGlucoseRxMs) / 60000UL;
+        int bars = (int)(age_min / 5);
+        if (bars > 8) bars = 8;
+        // Bascule en gris à 20 min : full redraw pour changer la couleur du nombre
+        if (age_min == 20 && g_lastBarsCount < 4) {
+            displayGlucose(lastGlucoseMgdl, lastGlucoseTrend);  // recolore + re-tirets
+        } else if (bars != g_lastBarsCount) {
+            // Juste un tiret de plus à dessiner sur row 6
+            drawAgeBars();
+            DisplayManager.update();
+        }
+    }
+
+#ifdef TEST_AGE_CYCLE
+    // Mode TEST : cycle 7 âges simulés toutes les 2s (0,5,10,15,20,25,30 min)
+    // → permet de voir 0,1,2,3,4,5 tirets + le plafond fixe à 30 min.
+    // Bascule grise visible à partir de 20 min.
+    static uint32_t lastTestMs = 0;
+    static int testPhase = 0;
+    if (!g_displayOff && (now - lastTestMs > 2000)) {
+        lastTestMs = now;
+        g_simAgeOffsetMs = (uint32_t)testPhase * 5UL * 60UL * 1000UL;  // 0..30 min
+        testPhase = (testPhase + 1) % 7;
+        if (!hasGlucose) {
+            hasGlucose      = true;
+            lastGlucoseMgdl = 142;
+            lastGlucoseTrend = 0;
+        }
+        displayGlucose(lastGlucoseMgdl, lastGlucoseTrend);
+    }
+#endif
 
     DisplayManager.tick();
     dexcom->tick();
