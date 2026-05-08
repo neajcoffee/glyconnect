@@ -7,9 +7,163 @@
 #include <esp_system.h>
 #include <time.h>
 #include <Preferences.h>
+#include <FastLED.h>
 #include "DisplayManager.h"
 #include "DexcomBLE_BD.h"
 #include <BLEDevice.h>
+
+
+// ── Boutons TC001 (Ulanzi) — pins matériels ─────────────────────────────────
+// Détection via interruptions GPIO (pas Button2/polling) : garantie hardware
+// que chaque press est capté même si CPU saturé par BLE/HTTP.
+#define BTN_LEFT_PIN   26    // bouton gauche  (UP physique)   = baisse luminosité
+#define BTN_RIGHT_PIN  14    // bouton droite  (DOWN physique) = monte luminosité
+#define BTN_SELECT_PIN 27    // bouton centre  (réservé pour usage futur)
+
+static const uint32_t BTN_DEBOUNCE_MS = 60;  // 60ms entre 2 press sur même pin
+
+static volatile uint32_t g_lastIsrLeft       = 0;
+static volatile uint32_t g_lastIsrRight      = 0;
+static volatile bool     g_btnLeftPending       = false;
+static volatile bool     g_btnRightPending      = false;
+static volatile bool     g_btnSelectShortPending = false;
+static volatile bool     g_btnSelectLongPending  = false;
+
+// SELECT : ISR sur CHANGE pour mesurer la durée press→release. Long press
+// (≥1s) = toggle ON/OFF de l'écran, short press = réservé futur usage.
+static volatile uint32_t g_selectPressMs   = 0;     // 0 = pas de press en cours
+static volatile bool     g_selectLongFired = false; // évite double-fire pendant le poll
+
+static void IRAM_ATTR isrBtnLeft() {
+    uint32_t now = millis();
+    if (now - g_lastIsrLeft >= BTN_DEBOUNCE_MS) {
+        g_lastIsrLeft = now;
+        g_btnLeftPending = true;
+    }
+}
+static void IRAM_ATTR isrBtnRight() {
+    uint32_t now = millis();
+    if (now - g_lastIsrRight >= BTN_DEBOUNCE_MS) {
+        g_lastIsrRight = now;
+        g_btnRightPending = true;
+    }
+}
+static void IRAM_ATTR isrBtnSelect() {
+    uint32_t now = millis();
+    bool isLow = (digitalRead(BTN_SELECT_PIN) == LOW);
+    if (isLow) {
+        // Press : enregistre le début (le poll dans buttonProcessTask déclenche
+        // le long press dès 1s sans attendre le release).
+        g_selectPressMs   = now;
+        g_selectLongFired = false;
+    } else {
+        // Release : si pas déjà fired en long, c'est un short press.
+        if (g_selectPressMs > 0 && !g_selectLongFired) {
+            uint32_t duration = now - g_selectPressMs;
+            if (duration >= 30 && duration < 1000) g_btnSelectShortPending = true;
+        }
+        g_selectPressMs = 0;
+    }
+}
+
+// Forward decl : remoteLog est défini plus bas dans le fichier
+static void remoteLog(const String& msg);
+
+// 5 niveaux de luminosité fixes (smartphone-like) : nuit / chambre / bureau / pièce lumineuse / plein jour.
+// Index sauvegardé en NVS (0..4), valeur effective = BRIGHTNESS_LEVELS[index].
+static const uint8_t BRIGHTNESS_LEVELS[]   = {1, 8, 32, 96, 255};
+static const uint8_t BRIGHTNESS_LEVELS_N   = sizeof(BRIGHTNESS_LEVELS);
+static int8_t  brightnessLevel = 2;          // default niveau médian (= 128)
+static uint8_t brightness      = 128;
+
+// Forward decls : utilisés par les handlers boutons définis plus bas dans ce fichier.
+static bool     g_displayOff       = false;
+static bool     hasGlucose         = false;
+static uint16_t lastGlucoseMgdl    = 0;
+static int8_t   lastGlucoseTrend   = 0;
+static void     displayGlucose(uint16_t mgdl, int8_t trend);
+
+static void saveBrightness() {
+    Preferences prefs;
+    prefs.begin("display", false);
+    prefs.putChar("level", brightnessLevel);
+    prefs.end();
+}
+
+static void loadBrightness() {
+    Preferences prefs;
+    prefs.begin("display", true);
+    brightnessLevel = prefs.getChar("level", 2);
+    prefs.end();
+    if (brightnessLevel < 0) brightnessLevel = 0;
+    if (brightnessLevel >= (int8_t)BRIGHTNESS_LEVELS_N) brightnessLevel = BRIGHTNESS_LEVELS_N - 1;
+    brightness = BRIGHTNESS_LEVELS[brightnessLevel];
+}
+
+static void applyBrightness() {
+    DisplayManager.setBrightness(brightness);
+    Serial.printf("[BTN] level=%d brightness=%u\n", (int)brightnessLevel, (unsigned)brightness);
+}
+
+// Handlers exécutés par buttonProcessTask (core 1, prio 10), indépendant du
+// main loop. Garantit la réactivité même si le main loop est dans un HTTP
+// timeout 3-8s. setBrightness() inclut un show() qui rend immédiatement la
+// nouvelle luminosité visible — pas besoin de feedback texte.
+static void handleBtnLeft() {
+    if (brightnessLevel > 0) brightnessLevel--;
+    brightness = BRIGHTNESS_LEVELS[brightnessLevel];
+    DisplayManager.setBrightness(brightness);
+    saveBrightness();
+    char buf[40];
+    snprintf(buf, sizeof(buf), "[BTN-L] level=%d brightness=%u", (int)brightnessLevel, (unsigned)brightness);
+    remoteLog(buf);
+}
+
+static void handleBtnRight() {
+    if (brightnessLevel < (int8_t)BRIGHTNESS_LEVELS_N - 1) brightnessLevel++;
+    brightness = BRIGHTNESS_LEVELS[brightnessLevel];
+    DisplayManager.setBrightness(brightness);
+    saveBrightness();
+    char buf[40];
+    snprintf(buf, sizeof(buf), "[BTN-R] level=%d brightness=%u", (int)brightnessLevel, (unsigned)brightness);
+    remoteLog(buf);
+}
+
+static void handleBtnSelectLong() {
+    g_displayOff = !g_displayOff;
+    if (g_displayOff) {
+        DisplayManager.setBrightness(0);
+        DisplayManager.clearMatrix();
+        DisplayManager.update();
+        remoteLog("[BTN-S] long → display OFF");
+    } else {
+        DisplayManager.setBrightness(brightness);
+        if (hasGlucose) displayGlucose(lastGlucoseMgdl, lastGlucoseTrend);
+        else            DisplayManager.update();
+        remoteLog("[BTN-S] long → display ON");
+    }
+}
+
+// Task dédié : process les flags posés par les ISR. Préempte le main loop
+// (priority 10 vs loopTask 1) → réagit même quand main loop bloqué sur HTTP.
+// Poll aussi le press-en-cours du SELECT pour fire le long press dès 1s écoulée.
+static void buttonProcessTask(void* /*p*/) {
+    for (;;) {
+        if (g_btnLeftPending)        { g_btnLeftPending        = false; handleBtnLeft();         }
+        if (g_btnRightPending)       { g_btnRightPending       = false; handleBtnRight();        }
+        if (g_btnSelectLongPending)  { g_btnSelectLongPending  = false; handleBtnSelectLong();   }
+        if (g_btnSelectShortPending) { g_btnSelectShortPending = false; /* TODO short SELECT */  }
+
+        // Détection long press en temps réel : si pin LOW depuis ≥1s sans avoir
+        // déjà fire, on déclenche maintenant (pas besoin d'attendre le release).
+        if (g_selectPressMs > 0 && !g_selectLongFired
+            && (millis() - g_selectPressMs >= 1000)) {
+            g_selectLongFired = true;
+            g_btnSelectLongPending = true;
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
 
 // ── Couleurs RGB565 (format Adafruit GFX) ────────────────────────────────────
 #define COL_BLACK   0x0000
@@ -148,12 +302,9 @@ static ArrowInfo trendArrow(int8_t t) {
 }
 
 // Une fois qu'on a reçu une glycémie, les labels d'état ne doivent plus
-// l'écraser : on garde la valeur lisible en permanence.
-static bool     hasGlucose         = false;
-static bool     hasReceivedReading = false;  // true dès le 1er onReading (valide ou capteur OFF)
-static uint16_t lastGlucoseMgdl   = 0;
-static int8_t   lastGlucoseTrend  = 0;
-static uint32_t lastGlucoseRxMs   = 0;  // timestamp réception (pour barre de progression)
+// l'écraser : on garde la valeur lisible en permanence. (hasGlucose, lastGlucoseMgdl,
+// lastGlucoseTrend, g_displayOff définis plus haut pour les handlers boutons.)
+static bool hasReceivedReading = false;  // true dès le 1er onReading (valide ou capteur OFF)
 
 // Lectures et labels d'état en attente de traitement par le main loop.
 // Les callbacks BLE s'exécutent dans la BTC_TASK (core 0) ; display et network
@@ -161,9 +312,6 @@ static uint32_t lastGlucoseRxMs   = 0;  // timestamp réception (pour barre de p
 static volatile bool            g_pendingReady = false;
 static DexcomReadingBD          g_pendingData;
 static volatile const uint16_t* g_pendingLabel = nullptr;  // label d'état à afficher
-
-// Intervalle attendu entre 2 lectures Dexcom (5 min)
-static const uint32_t READING_INTERVAL_MS = 5UL * 60UL * 1000UL;
 
 // Dessine un sprite RGB565 multi-couleur 32×8 pixel par pixel.
 // 0x0000 = pixel transparent (skip), sinon = couleur RGB565 du pixel.
@@ -247,32 +395,6 @@ static void displayGlucose(uint16_t mgdl, int8_t trend) {
 // Re-render la dernière glycémie (utile après un check OTA qui a pu corrompre la matrice)
 static void refreshGlucose() {
     if (hasGlucose) displayGlucose(lastGlucoseMgdl, lastGlucoseTrend);
-}
-
-// Barre de progression sur la rangée 7 : remplit en 5 min jusqu'au prochain scan attendu.
-// Couleur grise discrète. Si la lecture est en retard (> 5 min), le dernier pixel clignote.
-static void drawLoadingBar() {
-    if (!hasGlucose) return;
-
-    const uint16_t COL_BAR_DIM   = 0x4208;  // gris (RGB565 ~ #404040) — discret mais visible
-    const uint16_t COL_BAR_BLINK = 0x8410;  // gris plus clair (clignotement)
-
-    uint32_t now     = millis();
-    uint32_t elapsed = now - lastGlucoseRxMs;
-    bool     overdue = elapsed >= READING_INTERVAL_MS;
-
-    // Efface la rangée 7
-    for (int x = 0; x < MATRIX_WIDTH; x++) DisplayManager.drawPixel(x, 7, COL_BLACK);
-
-    if (overdue) {
-        // Barre pleine + dernier pixel clignote (500ms ON / 500ms OFF)
-        for (int x = 0; x < MATRIX_WIDTH - 1; x++) DisplayManager.drawPixel(x, 7, COL_BAR_DIM);
-        bool blinkOn = ((now / 500) % 2) == 0;
-        if (blinkOn) DisplayManager.drawPixel(MATRIX_WIDTH - 1, 7, COL_BAR_BLINK);
-    } else {
-        uint8_t filled = (uint8_t)((uint64_t)elapsed * MATRIX_WIDTH / READING_INTERVAL_MS);
-        for (int x = 0; x < filled; x++) DisplayManager.drawPixel(x, 7, COL_BAR_DIM);
-    }
 }
 
 // ── Log buffer → ntfy.sh ─────────────────────────────────────────────────────
@@ -393,16 +515,91 @@ static DexcomBLEBD* dexcom       = nullptr;
 static unsigned long lastCheckMs  = 0;
 static const unsigned long REBOOT_INTERVAL_MS = 24UL * 60 * 60 * 1000;  // 24h
 
+// ── Métriques fuite mémoire ─────────────────────────────────────────────────
+// Tracking long-terme du heap pour identifier les fuites résiduelles.
+// `lowMin` = pire largest jamais vu depuis boot (descend = fragmentation/leak).
+static uint32_t g_heapLowFree    = 0xFFFFFFFF;  // pire free heap vu
+static uint32_t g_heapLowLargest = 0xFFFFFFFF;  // pire largest contigu vu
+static uint32_t g_bleCycles      = 0;           // onReading() = lectures réussies
+static uint32_t g_bleAttempts    = 0;           // transitions vers WAIT_NEXT (succès+échecs)
+
+// Snapshot heap (free + largest) pour mesurer les deltas autour d'opérations.
+struct HeapSnap { uint32_t freeB; uint32_t largestB; };
+static HeapSnap heapSnap() {
+    return { (uint32_t)ESP.getFreeHeap(),
+             (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT) };
+}
+// Log delta autour d'une opération si significatif. Désactivé en mode prod
+// (instrumentation v459-v467 a confirmé la fuite : POST body → heap leak proportionnel).
+// Pour réactiver l'instrumentation : -DDEBUG_HEAP_DELTAS dans build_flags.
+static void heapDelta(const char* op, const HeapSnap& before, const HeapSnap& after) {
+#ifdef DEBUG_HEAP_DELTAS
+    int32_t dFree = (int32_t)after.freeB    - (int32_t)before.freeB;
+    int32_t dLarg = (int32_t)after.largestB - (int32_t)before.largestB;
+    if (abs(dFree) < 256 && abs(dLarg) < 256) return;
+    char buf[140];
+    snprintf(buf, sizeof(buf),
+        "[HEAP-Δ] %s free %d→%d (%+d) largest %d→%d (%+d)",
+        op,
+        (int)before.freeB,    (int)after.freeB,    (int)dFree,
+        (int)before.largestB, (int)after.largestB, (int)dLarg);
+    remoteLog(buf);
+#else
+    (void)op; (void)before; (void)after;
+#endif
+}
+
+// Met à jour les low-water-marks. Alarme remoteLog si descente de >=1KB
+// par rapport au précédent min (= fuite/fragmentation aiguë identifiable).
+static void heapTrack(const char* where) {
+    static bool initDone = false;
+    uint32_t freeNow    = ESP.getFreeHeap();
+    uint32_t largestNow = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
+    if (!initDone) {
+        g_heapLowFree    = freeNow;
+        g_heapLowLargest = largestNow;
+        initDone = true;
+        return;
+    }
+    bool alarm = false;
+    if (freeNow < g_heapLowFree) {
+        if (g_heapLowFree - freeNow >= 1024) alarm = true;
+        g_heapLowFree = freeNow;
+    }
+    if (largestNow < g_heapLowLargest) {
+        if (g_heapLowLargest - largestNow >= 1024) alarm = true;
+        g_heapLowLargest = largestNow;
+    }
+    if (alarm) {
+        char buf[120];
+        snprintf(buf, sizeof(buf), "[HEAP-MIN] %s free=%u(min=%u) largest=%u(min=%u)",
+            where, (unsigned)freeNow, (unsigned)g_heapLowFree,
+            (unsigned)largestNow, (unsigned)g_heapLowLargest);
+        remoteLog(buf);
+    }
+}
+
 // ── DEV OTA via ntfy.sh (HTTP plain, marche avec heap fragmenté) ─────────────
 #ifdef DEV_OTA_ENABLE
-static const unsigned long DEV_OTA_POLL_MS = 30UL * 1000;  // 30s en dev
+static const unsigned long DEV_OTA_POLL_MS = 120UL * 1000;  // 2 min : limite rate-limit ntfy
 static int  lastDevVersionSeen = 0;
+
+// Back-off rate-limit : si ntfy nous renvoie 429, on suspend tous les POST
+// pendant g_rateLimitUntil pour ne pas leak (chaque 429 fuite ~2-7KB).
+static volatile uint32_t g_rateLimitUntil = 0;
+static bool isRateLimited() { return millis() < g_rateLimitUntil; }
+static void noteRateLimit429() {
+    g_rateLimitUntil = millis() + 60UL * 1000;  // suspend 60s
+    Serial.printf("[RATE-LIMIT] 429 detected, suspending POSTs for 60s\n");
+}
 
 // Flush les logs accumulés vers ntfy.sh en HTTP plain (DEV uniquement).
 // Ne vide le buffer qu'après POST=200 → "partial WiFi" (associé sans internet)
 // ne perd plus les logs : ils restent en buffer pour le prochain flush.
 static void devFlushLogs() {
     if (rlogCount == 0 || WiFi.status() != WL_CONNECTED) return;
+    if (isRateLimited()) return;  // ntfy nous a 429ed récemment
+    HeapSnap _hb = heapSnap();
 
     // Snapshot : nouveaux logs ajoutés pendant le POST (BLE callback core 0)
     // resteront en buffer après consommation, ne sont pas envoyés ce coup-ci.
@@ -424,9 +621,13 @@ static void devFlushLogs() {
     http.addHeader("Content-Type", "text/plain; charset=utf-8");
     int code = http.POST(body);
     http.end();
+    client.stop();  // force libération buffers TCP/lwIP même en cas d'erreur
 
     if (code != 200) {
         Serial.printf("[FLUSH] POST=%d, %u logs gardés en buffer\n", code, snapshotCount);
+        if (code == 429) noteRateLimit429();
+        heapTrack("flush-fail");
+        heapDelta("flush-fail", _hb, heapSnap());
         return;  // partial WiFi / ntfy down → retry au prochain flush
     }
 
@@ -434,6 +635,8 @@ static void devFlushLogs() {
     // Les logs ajoutés pendant le POST sont préservés dans rlogCount résiduel.
     if (rlogCount >= snapshotCount) rlogCount -= snapshotCount;
     else                            rlogCount = 0;
+    heapTrack("flush-ok");
+    heapDelta("flush-ok", _hb, heapSnap());
 }
 
 // Parse stream ndjson de ntfy ligne par ligne (jamais tout en RAM, heap-safe)
@@ -443,9 +646,11 @@ static void devOtaPoll() {
         Serial.println("[DEV-OTA] WiFi déconnecté, skip");
         return;
     }
+    if (isRateLimited()) return;  // attendre la fin du back-off avant de poll
     Serial.printf("[DEV-OTA] poll heap=%u largest=%u\n",
         (unsigned)ESP.getFreeHeap(),
         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
+    HeapSnap _hb_poll = heapSnap();
 
     devFlushLogs();
 
@@ -497,7 +702,10 @@ static void devOtaPoll() {
         }
         line = "";
     }
+    if (code == 429) noteRateLimit429();
     http.end();
+    client.stop();
+    heapDelta("ota-poll", _hb_poll, heapSnap());
 
     if (latestVer == 0) return;  // aucune MAJ vue
     if (latestVer == lastDevVersionSeen) return;  // déjà tenté ce cycle
@@ -599,6 +807,8 @@ static uint8_t     pendGlucHead  = 0;
 
 static void flushPendingGlucose() {
     if (pendGlucCount == 0 || WiFi.status() != WL_CONNECTED) return;
+    if (isRateLimited()) return;
+    HeapSnap _hb = heapSnap();
 
     while (pendGlucCount > 0) {
         uint8_t tail = (pendGlucHead - pendGlucCount + PEND_GLUC_CAP) % PEND_GLUC_CAP;
@@ -622,15 +832,21 @@ static void flushPendingGlucose() {
         http.addHeader("Tags", "glucose");
         int code = http.POST(body);
         http.end();
+        client.stop();
 
         if (code != 200) {
             char dbg[80];
             snprintf(dbg, sizeof(dbg), "[PUB] POST=%d, %u en queue", code, pendGlucCount);
             remoteLog(dbg);
+            if (code == 429) noteRateLimit429();
+            heapTrack("pub-fail");
+            heapDelta("pub-fail", _hb, heapSnap());
             return;  // garde le reste de la queue pour retry
         }
         pendGlucCount--;
     }
+    heapTrack("pub-ok");
+    heapDelta("pub-ok", _hb, heapSnap());
 }
 #endif
 
@@ -652,6 +868,7 @@ static void publishGlucose(const DexcomReadingBD& r) {
 // Tout le traitement display/network est différé au main loop via g_pending.
 static void onReading(const DexcomReadingBD& r) {
     hasReceivedReading = true;
+    g_bleCycles++;
     if (!r.sensorOk) {
         remoteLog("[GLUC] Capteur hors du corps");
     } else {
@@ -676,6 +893,31 @@ void setup() {
     DisplayManager.clearMatrix();
     DisplayManager.update();
 
+    // Boutons : LEFT/RIGHT contrôlent la luminosité, SELECT inactif pour l'instant.
+    // Charge la dernière luminosité depuis NVS et l'applique avant tout affichage utile.
+    loadBrightness();
+    applyBrightness();
+
+    // Indicateur de boot : 3 points cyan "..." pendant que WiFi/BLE s'initialisent.
+    // Remplacés automatiquement par les labels SCAN/AUTH/etc dès que le BLE émet
+    // un event, puis par la glycémie à la 1ère lecture.
+    DisplayManager.clearMatrix();
+    DisplayManager.setTextColor(0x867D);  // sky blue ~ #87CEEB
+    DisplayManager.printText(0, 6, "...", TEXT_ALIGNMENT::CENTER, 1);
+    DisplayManager.update();
+    // Détection via interruptions GPIO : déclenchée au niveau hardware sur front
+    // descendant (bouton appuyé → pin LOW). Insensible au scheduling tasks.
+    pinMode(BTN_LEFT_PIN, INPUT_PULLUP);
+    pinMode(BTN_RIGHT_PIN, INPUT_PULLUP);
+    pinMode(BTN_SELECT_PIN, INPUT_PULLUP);
+    attachInterrupt(digitalPinToInterrupt(BTN_LEFT_PIN),   isrBtnLeft,   FALLING);
+    attachInterrupt(digitalPinToInterrupt(BTN_RIGHT_PIN),  isrBtnRight,  FALLING);
+    // SELECT en CHANGE pour mesurer durée press→release (long vs short)
+    attachInterrupt(digitalPinToInterrupt(BTN_SELECT_PIN), isrBtnSelect, CHANGE);
+    // Task qui process les flags d'ISR : prio 10 sur core 1 → préempte main loop
+    // bloqué dans HTTP, garantit la réactivité du visual feedback.
+    xTaskCreatePinnedToCore(buttonProcessTask, "btnProc", 4096, nullptr, 10, nullptr, 1);
+
 #ifdef DEV_OTA_ENABLE
     // DEV : WiFi STA permanent (coex avec BLE), poll ntfy au boot
     Serial.println("[DEV] WiFi STA permanent...");
@@ -696,7 +938,8 @@ void setup() {
 #endif
 
     remoteLog("[BOOT] TC001-PROD fw v" + String(FIRMWARE_VERSION) + " Bluedroid tx=" DEV_TRANSMITTER_ID " reset=" + resetReasonStr());
-    displayLabel(label_boot);
+    // (label_boot supprimé — le splash "Sugarboard" remplace, l'écran reste vide
+    // jusqu'au 1er label d'état BLE ou à la 1ère lecture)
 #ifdef DEV_OTA_ENABLE
     devFlushLogs();  // envoie [BOOT] immédiatement — si BLE init crash ensuite, on le sait
 #endif
@@ -726,10 +969,15 @@ void setup() {
 
 void loop() {
     // getStateNameC() retourne un const char* vers un string literal statique — pas d'allocation heap.
+    // Log heap=free/largest à chaque transition pour pinpointer la fragmentation par cycle BLE.
     static const char* lastState = "";
     const char* cur = dexcom->getStateNameC();
     if (cur != lastState) {
-        remoteLog(String("[STATE] ") + lastState + " → " + cur);
+        // Log d'état BLE simplifié (pas de heap pour réduire body POST)
+        char st[60];
+        snprintf(st, sizeof(st), "[STATE] %s → %s", lastState, cur);
+        remoteLog(st);
+        if (strcmp(cur, "WAIT_NEXT") == 0) g_bleAttempts++;
         lastState = cur;
     }
 
@@ -739,7 +987,7 @@ void loop() {
     const uint16_t* lbl = const_cast<const uint16_t*>(g_pendingLabel);
     if (lbl) {
         g_pendingLabel = nullptr;
-        displayLabel(lbl);
+        if (!g_displayOff) displayLabel(lbl);
     }
 
     // Traitement lecture BLE différé (display + network depuis main loop, thread-safe)
@@ -748,17 +996,14 @@ void loop() {
         DexcomReadingBD r = g_pendingData;
         if (!r.sensorOk) {
             hasGlucose = false;
-            displayLabel(label_off);
+            if (!g_displayOff) displayLabel(label_off);
         } else {
             hasGlucose       = true;
             lastGlucoseMgdl  = r.mgdl;
             lastGlucoseTrend = r.trend;
-            lastGlucoseRxMs  = millis();
-            displayGlucose(r.mgdl, r.trend);
-            drawLoadingBar();
-            DisplayManager.update();
+            if (!g_displayOff) displayGlucose(r.mgdl, r.trend);
         }
-        publishGlucose(r);
+        publishGlucose(r);  // continue de publier même écran OFF
     }
 
     // Reboot programmé toutes les 24h pour rafraîchir le heap + check OTA au boot
@@ -820,16 +1065,21 @@ void loop() {
     }
 
     // Heartbeat toutes les 2 min — confirme que le firmware est actif même sans lecture BLE
-    // heap=free/largest : si largest descend bien sous free, fragmentation à surveiller
+    // heap=free/largest min=lowFree/lowLargest : low-water-marks depuis boot (descente = fuite)
+    // cyc=N/M : N lectures réussies / M tentatives BLE complètes
     static uint32_t lastHeartbeatMs = 0;
     if (now - lastHeartbeatMs > 2UL * 60 * 1000) {
         lastHeartbeatMs = now;
-        char hb[140];
-        snprintf(hb, sizeof(hb), "[HB] up=%lus state=%s last=%umg heap=%u/%u wifi=%s",
+        heapTrack("HB");
+        char hb[180];
+        snprintf(hb, sizeof(hb),
+            "[HB] up=%lus state=%s last=%umg heap=%u/%u min=%u/%u cyc=%u/%u wifi=%s",
             now / 1000, dexcom->getStateNameC(),
             lastGlucoseMgdl,
             (unsigned)ESP.getFreeHeap(),
             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT),
+            (unsigned)g_heapLowFree, (unsigned)g_heapLowLargest,
+            (unsigned)g_bleCycles, (unsigned)g_bleAttempts,
             WiFi.status() == WL_CONNECTED ? "OK" : "DOWN");
         remoteLog(hb);
     }
@@ -850,13 +1100,8 @@ void loop() {
     // En prod : pas de runtime OTA (HTTPS impossible avec heap fragmenté).
     // Le reboot 24h ci-dessus déclenche un bootOtaCheck propre.
 
-    // Rafraîchit la barre de progression toutes les 500ms (progression + clignotement)
-    static uint32_t lastBarMs = 0;
-    if (hasGlucose && (now - lastBarMs > 500)) {
-        lastBarMs = now;
-        drawLoadingBar();
-        DisplayManager.update();
-    }
+    // Boutons : ISR détecte + buttonProcessTask exécute (core 1, prio 10).
+    // setBrightness() applique directement, pas de feedback texte ni restauration.
 
     DisplayManager.tick();
     dexcom->tick();

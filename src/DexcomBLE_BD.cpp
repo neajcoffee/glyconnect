@@ -193,6 +193,11 @@ bool DexcomBLEBD::connect() {
     // changer de LTK, et garder un ancien fait échouer SMP silencieusement
     clearAllBonds();
 
+    // Libère les advertised devices accumulés pendant le scan : sans ça, chaque
+    // device vu (incluant pompes, autres BLE proches) reste en mémoire jusqu'au
+    // prochain startScan(). Réduit la fragmentation cycle-après-cycle.
+    if (pScan) pScan->clearResults();
+
     // Réutilise le pClient créé dans begin() ; juste cleanup avant re-connect.
     // Les BLERemoteCharacteristic appartenaient au service de la connexion précédente
     // et sont libérés au disconnect → on les invalide explicitement.
@@ -347,6 +352,12 @@ void DexcomBLEBD::disconnect(){
     authChar = nullptr;
     controlChar = nullptr;
     needSubscribeControl = false;
+    // CRUCIAL anti-fuite : libère m_servicesMap du BLEClient.
+    // Sans ça, chaque cycle ajoute des BLERemoteService/Char au map → fuite ~1-3KB/cycle.
+    // clearServices() est rendu public via patch lib (cf. patch_ble_lib.sh).
+    if (pClient) pClient->clearServices();
+    // Libère les advert objects résiduels avant le prochain SCAN (anti-fragmentation)
+    if (pScan) pScan->clearResults();
 }
 
 // Appelé par BLE lib (BTC_TASK) quand le transmetteur disparait inopinément.
