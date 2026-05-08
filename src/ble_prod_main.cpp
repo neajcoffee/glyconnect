@@ -9,8 +9,16 @@
 #include <Preferences.h>
 #include <FastLED.h>
 #include "DisplayManager.h"
-#include "DexcomBLE_BD.h"
-#include <BLEDevice.h>
+#ifdef USE_NIMBLE
+  #include "DexcomBLE_NB.h"
+  #define DexcomBLEBD       DexcomBLENB
+  #define DexcomReadingBD   DexcomReadingNB
+  #define DexcomReadingCbBD DexcomReadingCbNB
+  #define DexcomStateCbBD   DexcomStateCbNB
+#else
+  #include "DexcomBLE_BD.h"
+  #include <BLEDevice.h>
+#endif
 
 
 // ── Boutons TC001 (Ulanzi) — pins matériels ─────────────────────────────────
@@ -549,9 +557,9 @@ static void heapDelta(const char* op, const HeapSnap& before, const HeapSnap& af
 #endif
 }
 
-// Met à jour les low-water-marks. Alarme remoteLog si descente de >=1KB
-// par rapport au précédent min (= fuite/fragmentation aiguë identifiable).
+// Met à jour les low-water-marks. Désactivé en prod ; activable via -DDEBUG_HEAP_DELTAS.
 static void heapTrack(const char* where) {
+#ifdef DEBUG_HEAP_DELTAS
     static bool initDone = false;
     uint32_t freeNow    = ESP.getFreeHeap();
     uint32_t largestNow = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
@@ -577,6 +585,9 @@ static void heapTrack(const char* where) {
             (unsigned)largestNow, (unsigned)g_heapLowLargest);
         remoteLog(buf);
     }
+#else
+    (void)where;
+#endif
 }
 
 // ── DEV OTA via ntfy.sh (HTTP plain, marche avec heap fragmenté) ─────────────
@@ -748,7 +759,11 @@ static void devOtaPoll() {
     http.end();
     client.stop();
     delay(200);
+#ifdef USE_NIMBLE
+    NimBLEDevice::deinit(true);
+#else
     BLEDevice::deinit(true);
+#endif
     delay(500);
 
     snprintf(dbg, sizeof(dbg), "[DEV-OTA] heap après BLE deinit: %u/%u",
@@ -971,13 +986,30 @@ void loop() {
     // getStateNameC() retourne un const char* vers un string literal statique — pas d'allocation heap.
     // Log heap=free/largest à chaque transition pour pinpointer la fragmentation par cycle BLE.
     static const char* lastState = "";
+    static HeapSnap    cycleStartSnap = {0, 0};   // snap au début d'un cycle BLE
     const char* cur = dexcom->getStateNameC();
     if (cur != lastState) {
-        // Log d'état BLE simplifié (pas de heap pour réduire body POST)
+#ifdef DEBUG_HEAP_DELTAS
+        // En mode debug : log heap à chaque transition pour pinpoint exact
+        char st[110];
+        snprintf(st, sizeof(st), "[STATE] %s → %s heap=%u/%u",
+            lastState, cur,
+            (unsigned)ESP.getFreeHeap(),
+            (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
+        remoteLog(st);
+        // Mesure delta heap d'un cycle BLE complet (CONNECTING → WAIT_NEXT)
+        if (strcmp(cur, "CONNECTING") == 0) cycleStartSnap = heapSnap();
+        else if (strcmp(cur, "WAIT_NEXT") == 0 && cycleStartSnap.freeB > 0) {
+            heapDelta("ble-cycle", cycleStartSnap, heapSnap());
+            cycleStartSnap = {0, 0};
+        }
+#else
         char st[60];
         snprintf(st, sizeof(st), "[STATE] %s → %s", lastState, cur);
         remoteLog(st);
+#endif
         if (strcmp(cur, "WAIT_NEXT") == 0) g_bleAttempts++;
+        heapTrack(cur);
         lastState = cur;
     }
 
@@ -1064,21 +1096,17 @@ void loop() {
         }
     }
 
-    // Heartbeat toutes les 2 min — confirme que le firmware est actif même sans lecture BLE
-    // heap=free/largest min=lowFree/lowLargest : low-water-marks depuis boot (descente = fuite)
-    // cyc=N/M : N lectures réussies / M tentatives BLE complètes
+    // Heartbeat toutes les 2 min — confirme que le firmware est actif.
     static uint32_t lastHeartbeatMs = 0;
     if (now - lastHeartbeatMs > 2UL * 60 * 1000) {
         lastHeartbeatMs = now;
-        heapTrack("HB");
-        char hb[180];
+        char hb[140];
         snprintf(hb, sizeof(hb),
-            "[HB] up=%lus state=%s last=%umg heap=%u/%u min=%u/%u cyc=%u/%u wifi=%s",
+            "[HB] up=%lus state=%s last=%umg heap=%u/%u cyc=%u/%u wifi=%s",
             now / 1000, dexcom->getStateNameC(),
             lastGlucoseMgdl,
             (unsigned)ESP.getFreeHeap(),
             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT),
-            (unsigned)g_heapLowFree, (unsigned)g_heapLowLargest,
             (unsigned)g_bleCycles, (unsigned)g_bleAttempts,
             WiFi.status() == WL_CONNECTED ? "OK" : "DOWN");
         remoteLog(hb);
