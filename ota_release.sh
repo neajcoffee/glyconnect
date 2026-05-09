@@ -51,7 +51,7 @@ echo -n "$WIFI_VER" > "$ASSETS_DIR/version_wifi.txt"
 
 # 5. Tag basé sur ce qui est bumpé
 TAG="${KIND}-v${VERSION}"
-gh release delete "$TAG" --repo neajcoffee/glyconnect --yes 2>/dev/null || true
+gh release delete "$TAG" --repo neajcoffee/sugarboard --yes 2>/dev/null || true
 
 # 6. Créer la release avec les 2 firmwares + 2 version.txt
 echo "→ Publication GitHub Release $TAG..."
@@ -60,7 +60,7 @@ gh release create "$TAG" \
     "$ASSETS_DIR/firmware_wifi.bin" \
     "$ASSETS_DIR/version_ble.txt" \
     "$ASSETS_DIR/version_wifi.txt" \
-    --repo neajcoffee/glyconnect \
+    --repo neajcoffee/sugarboard \
     --title "$TAG (ble=$BLE_VER, wifi=$WIFI_VER)" \
     --notes "Update $KIND → v$VERSION (ble=$BLE_VER, wifi=$WIFI_VER)" \
     --latest

@@ -39,7 +39,7 @@ static const char* DEFAULT_NTFY_OTA = "";
 #ifdef DEV_OTA_BASE_URL
 static const char* DEFAULT_OTA_BASE = DEV_OTA_BASE_URL;
 #else
-static const char* DEFAULT_OTA_BASE = "https://github.com/neajcoffee/glyconnect/releases/latest/download";
+static const char* DEFAULT_OTA_BASE = "https://github.com/neajcoffee/sugarboard/releases/latest/download";
 #endif
 
 // Couleur RGB565 pour le label SETUP

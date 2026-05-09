@@ -409,9 +409,9 @@
     const FOOTER_H  = 72;
     document.documentElement.style.setProperty('--footer-h', FOOTER_H + 'px');
 
-    // ── Source ntfy : topic via ?topic=… (défaut : neaj-glyconnect-data) ──
+    // ── Source ntfy : topic via ?topic=… (défaut : neaj-sugarboard-data) ──
     const NTFY_HOST = 'ntfy.sh';
-    const NTFY_TOPIC = new URLSearchParams(location.search).get('topic') || 'neaj-glyconnect-data';
+    const NTFY_TOPIC = new URLSearchParams(location.search).get('topic') || 'neaj-sugarboard-data';
     const NTFY_HTTPS = `https://${NTFY_HOST}/${NTFY_TOPIC}`;
     const NTFY_WSS   = `wss://${NTFY_HOST}/${NTFY_TOPIC}/ws`;
 
