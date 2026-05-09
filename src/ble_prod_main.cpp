@@ -9,16 +9,7 @@
 #include <Preferences.h>
 #include <FastLED.h>
 #include "DisplayManager.h"
-#ifdef USE_NIMBLE
-  #include "DexcomBLE_NB.h"
-  #define DexcomBLEBD       DexcomBLENB
-  #define DexcomReadingBD   DexcomReadingNB
-  #define DexcomReadingCbBD DexcomReadingCbNB
-  #define DexcomStateCbBD   DexcomStateCbNB
-#else
-  #include "DexcomBLE_BD.h"
-  #include <BLEDevice.h>
-#endif
+#include "DexcomBLE_NB.h"
 
 
 // ── Boutons TC001 (Ulanzi) — pins matériels ─────────────────────────────────
@@ -346,7 +337,7 @@ static bool hasReceivedReading = false;  // true dès le 1er onReading (valide o
 // Les callbacks BLE s'exécutent dans la BTC_TASK (core 0) ; display et network
 // ne sont pas thread-safe depuis ce contexte → on diffère ici, loop() traite.
 static volatile bool            g_pendingReady = false;
-static DexcomReadingBD          g_pendingData;
+static DexcomReadingNB          g_pendingData;
 static volatile const uint16_t* g_pendingLabel = nullptr;  // label d'état à afficher
 
 // Dessine un sprite RGB565 multi-couleur 32×8 pixel par pixel.
@@ -578,8 +569,8 @@ static void bootOtaCheck() {
 // déclenché soit par power-cycle, soit par le reboot programmé 24h ci-dessous.
 // En dev, le poll ntfy.sh HTTP plain (devOtaPoll) prend le relais.
 
-// ── DexcomBLEBD ──────────────────────────────────────────────────────────────
-static DexcomBLEBD* dexcom       = nullptr;
+// ── DexcomBLENB ──────────────────────────────────────────────────────────────
+static DexcomBLENB* dexcom       = nullptr;
 static unsigned long lastCheckMs  = 0;
 static const unsigned long REBOOT_INTERVAL_MS = 24UL * 60 * 60 * 1000;  // 24h
 
@@ -819,14 +810,9 @@ static void devOtaPoll() {
     http.end();
     client.stop();
     delay(200);
-#ifdef USE_NIMBLE
-    // NimBLE consomme déjà peu (~100KB libres au boot vs Bluedroid 33KB), pas
-    // besoin de deinit. NimBLEDevice::deinit(true) crash avec
-    // "assert failed: npl_freertos_mutex_pend" (bug NimBLE-Arduino 1.4.x) →
-    // on skip et on garde juste le stopScan() au-dessus.
-#else
-    BLEDevice::deinit(true);
-#endif
+    // NimBLE consomme déjà peu (~100KB libres au boot), pas besoin de deinit.
+    // NimBLEDevice::deinit(true) crash avec "assert failed: npl_freertos_mutex_pend"
+    // (bug NimBLE-Arduino 1.4.x) → on garde juste le stopScan() au-dessus.
     delay(500);
 
     snprintf(dbg, sizeof(dbg), "[DEV-OTA] heap après BLE deinit: %u/%u",
@@ -877,7 +863,7 @@ static void devOtaPoll() {
 // 5 entrées = 25 min de tampon (lectures Dexcom toutes les 5 min) avant qu'on
 // commence à drop les plus anciennes. Suffit pour la plupart des coupures WiFi.
 #ifdef DEV_NTFY_DATA_TOPIC
-struct PendingGluc { DexcomReadingBD reading; time_t ts; };
+struct PendingGluc { DexcomReadingNB reading; time_t ts; };
 static const uint8_t PEND_GLUC_CAP = 5;
 static PendingGluc pendGluc[PEND_GLUC_CAP];
 static uint8_t     pendGlucCount = 0;
@@ -891,7 +877,7 @@ static void flushPendingGlucose() {
     while (pendGlucCount > 0) {
         uint8_t tail = (pendGlucHead - pendGlucCount + PEND_GLUC_CAP) % PEND_GLUC_CAP;
         const PendingGluc& pg = pendGluc[tail];
-        const DexcomReadingBD& r = pg.reading;
+        const DexcomReadingNB& r = pg.reading;
 
         char body[200];
         snprintf(body, sizeof(body),
@@ -931,7 +917,7 @@ static void flushPendingGlucose() {
 // Publie une lecture sur ntfy.sh (topic data) — appelé après chaque onReading.
 // Capture le timestamp à la lecture, enqueue, puis flush ce qu'on peut.
 // Si WiFi/ntfy down : la lecture reste en queue, retry au prochain flush.
-static void publishGlucose(const DexcomReadingBD& r) {
+static void publishGlucose(const DexcomReadingNB& r) {
 #ifdef DEV_NTFY_DATA_TOPIC
     time_t ts = time(NULL);
     pendGluc[pendGlucHead] = { r, ts > 1000000L ? ts : 0 };
@@ -944,7 +930,7 @@ static void publishGlucose(const DexcomReadingBD& r) {
 
 // Callback BLE (BTC_TASK, core 0) : log uniquement, pas de display ni network.
 // Tout le traitement display/network est différé au main loop via g_pending.
-static void onReading(const DexcomReadingBD& r) {
+static void onReading(const DexcomReadingNB& r) {
     hasReceivedReading = true;
     g_bleCycles++;
     if (!r.sensorOk) {
@@ -1022,7 +1008,7 @@ void setup() {
     devFlushLogs();  // envoie [BOOT] immédiatement — si BLE init crash ensuite, on le sait
 #endif
 
-    dexcom = new DexcomBLEBD(DEV_TRANSMITTER_ID);
+    dexcom = new DexcomBLENB(DEV_TRANSMITTER_ID);
     dexcom->begin(
         onReading,
         [](const String& s) {
@@ -1088,7 +1074,7 @@ void loop() {
     // Traitement lecture BLE différé (display + network depuis main loop, thread-safe)
     if (g_pendingReady) {
         g_pendingReady = false;
-        DexcomReadingBD r = g_pendingData;
+        DexcomReadingNB r = g_pendingData;
         if (!r.sensorOk) {
             hasGlucose = false;
             if (!g_displayOff) displayLabel(label_off);
