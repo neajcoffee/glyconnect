@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Glyconnect — Outils</title>
+<style>
+  :root{--bg:#0e1116;--panel:#161b22;--border:#30363d;--text:#c9d1d9;--accent:#58a6ff;--muted:#8b949e}
+  *{box-sizing:border-box}
+  body{margin:0;padding:32px 20px;font-family:-apple-system,system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+  .wrap{max-width:760px;margin:0 auto}
+  h1{font-size:28px;margin:0 0 4px;color:var(--accent);font-weight:600}
+  .sub{color:var(--muted);font-size:14px;margin:0 0 32px;line-height:1.5}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px}
+  a.tool{display:block;padding:18px;background:var(--panel);border:1px solid var(--border);border-radius:10px;text-decoration:none;color:var(--text);transition:all 0.15s}
+  a.tool:hover{border-color:var(--accent);transform:translateY(-2px);box-shadow:0 4px 12px rgba(88,166,255,0.12)}
+  a.tool h2{margin:0 0 6px;font-size:16px;color:var(--accent)}
+  a.tool p{margin:0;font-size:13px;color:var(--muted);line-height:1.45}
+  .icon{font-size:22px;margin-bottom:10px;display:block}
+  footer{margin-top:40px;padding-top:20px;border-top:1px solid var(--border);font-size:12px;color:var(--muted);text-align:center}
+  footer a{color:var(--accent);text-decoration:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Glyconnect — Outils</h1>
+  <p class="sub">Petits outils web pour préparer des designs de matrice LED 32×8 et lire les frames du firmware.</p>
+
+  <div class="grid">
+    <a class="tool" href="tools/decor_share.html">
+      <span class="icon">🎨</span>
+      <h2>Decor Share</h2>
+      <p>Dessine une image fixe 32×8 et exporte le code RGB565 prêt à coller dans le firmware.</p>
+    </a>
+    <a class="tool" href="tools/decor_boot.html">
+      <span class="icon">🚀</span>
+      <h2>Decor Boot</h2>
+      <p>Bannière défilante (largeur jusqu'à 256 px) pour l'écran de démarrage. Aperçu animé inclus.</p>
+    </a>
+    <a class="tool" href="tools/sprite_editor.html">
+      <span class="icon">✏️</span>
+      <h2>Sprite Editor</h2>
+      <p>Éditeur de sprites avancé avec gestion multi-frames.</p>
+    </a>
+    <a class="tool" href="tools/reader.html">
+      <span class="icon">📖</span>
+      <h2>Reader</h2>
+      <p>Visualise et décode les frames RGB565 envoyées par le firmware.</p>
+    </a>
+  </div>
+
+  <footer>
+    Source : <a href="https://github.com/neajcoffee/glyconnect">github.com/neajcoffee/glyconnect</a>
+  </footer>
+</div>
+</body>
+</html>

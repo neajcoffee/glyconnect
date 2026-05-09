@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sugarboard Boot Studio</title>
+<style>
+  :root{--bg:#0e1116;--panel:#161b22;--border:#30363d;--text:#c9d1d9;--accent:#58a6ff;--green:#2ea043;--matrix:#000}
+  *{box-sizing:border-box}
+  body{margin:0 auto;padding:14px;font-family:-apple-system,system-ui,sans-serif;background:var(--bg);color:var(--text);max-width:1100px}
+  h1{font-size:20px;margin:0 0 6px;color:var(--accent)}
+  .intro{font-size:13px;opacity:0.75;margin:0 0 18px;line-height:1.5}
+  label{display:block;font-size:13px;margin:14px 0 4px;opacity:0.85}
+  input[type=text],input[type=number],select{width:100%;padding:10px;font-size:14px;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;font-family:inherit;box-sizing:border-box}
+  input[type=text]:focus,input[type=number]:focus,select:focus{outline:none;border-color:var(--accent)}
+
+  .step{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:14px;margin-top:18px}
+  .step h2{font-size:14px;margin:0 0 8px;color:var(--accent)}
+  .small{font-size:11px;opacity:0.6;margin-top:4px}
+  .ok{color:var(--green);font-weight:600}
+  .row{display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap}
+
+  /* === Canvas édition (largeur dynamique, scroll horizontal si nécessaire) === */
+  .edit-wrap{margin:10px 0;padding:8px;background:#0a0d12;border:1px solid var(--border);border-radius:6px;overflow-x:auto;max-width:100%}
+  #canvas{display:grid;grid-auto-flow:column;grid-template-rows:repeat(8,16px);gap:1px;background:var(--border);padding:2px;border-radius:4px;width:max-content;user-select:none;touch-action:pan-y}
+  #canvas div{width:16px;height:16px;background:#0e1116;cursor:crosshair;border-radius:1px}
+  #canvas div:hover{outline:1px solid var(--accent)}
+  /* Marque les colonnes 0–31 (la première fenêtre matrice visible au démarrage) */
+  #canvas div.matrix-mark{box-shadow:inset 0 0 0 1px rgba(88,166,255,0.18)}
+
+  /* === Preview matrice 32×8 (avec animation) === */
+  .preview-stage{margin:8px 0;padding:6px;background:#000;border:1px solid var(--border);border-radius:6px;overflow:hidden;width:100%;display:flex;justify-content:center}
+  #preview{display:grid;grid-template-rows:repeat(8,1fr);grid-auto-flow:column;gap:1px;background:#1a1a1a;padding:2px;border-radius:4px;width:100%;max-width:768px;aspect-ratio:32/8}
+  #preview div{background:#000;min-width:0;min-height:0;border-radius:1px}
+
+  .anim-ctrls{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-top:10px}
+  .anim-ctrls .field{display:flex;flex-direction:column;gap:4px}
+  .anim-ctrls label{margin:0;font-size:12px;opacity:0.75}
+  .play-row{display:flex;gap:8px;align-items:center;margin-top:12px;flex-wrap:wrap}
+  .play-row .pos{font-size:12px;opacity:0.7;font-family:ui-monospace,Menlo,monospace;margin-left:auto}
+  button.play{background:var(--accent);color:var(--bg);border:none;font-weight:600;padding:9px 16px;font-size:13px;border-radius:6px;cursor:pointer}
+  button.play:hover{filter:brightness(1.1)}
+  button{padding:7px 11px;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;font-family:inherit;font-size:12px;cursor:pointer}
+  button:hover{border-color:var(--accent)}
+
+  /* === Palette (reprise de decor_share) === */
+  .pal-panel{background:#0a0d12;border:1px solid var(--border);border-radius:6px;padding:6px;margin:8px 0}
+  .pal-row{display:flex;gap:2px;margin-bottom:2px}
+  .pal-row:last-child{margin-bottom:0}
+  .pal-row .lbl{width:38px;font-size:9px;opacity:0.55;display:flex;align-items:center;flex-shrink:0}
+  .pal-row .swatches{display:flex;gap:2px;flex:1;flex-wrap:wrap}
+  .sw{width:18px;height:18px;border:1.5px solid #30363d;border-radius:3px;cursor:pointer;flex-shrink:0}
+  .sw.active{border-color:var(--accent);border-width:2px;transform:scale(1.15)}
+  .sw:hover{border-color:#888}
+
+  .tool-btn{display:inline-flex;align-items:center;gap:5px;padding:6px 10px;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;cursor:pointer;font-size:11px;opacity:0.85}
+  .tool-btn.active{background:var(--accent);color:var(--bg);border-color:var(--accent);opacity:1}
+  .tool-btn svg{width:14px;height:14px}
+
+  textarea{width:100%;height:160px;padding:10px 42px 10px 10px;font-family:ui-monospace,Menlo,monospace;font-size:11px;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;resize:vertical;box-sizing:border-box;margin-top:8px;display:block}
+  .code-wrap{position:relative}
+  .copy-btn{position:absolute;top:14px;right:8px;width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center;background:rgba(88,166,255,0.12);color:var(--accent);border:1px solid var(--border);border-radius:6px;cursor:pointer}
+  .copy-btn:hover{background:rgba(88,166,255,0.22);border-color:var(--accent)}
+  .copy-btn.ok{background:var(--green);color:white;border-color:var(--green)}
+  .copy-btn svg{width:16px;height:16px}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Sugarboard Boot Studio</h1>
+  <p class="intro">Dessine un message défilant pour l'écran de démarrage. La largeur peut dépasser la matrice (32 px) — utilise l'aperçu en bas pour simuler le défilement.</p>
+</header>
+
+<div class="step">
+  <h2>1. Paramètres</h2>
+  <div class="row">
+    <div style="flex:2;min-width:200px">
+      <label>Nom du design</label>
+      <input type="text" id="presetName" placeholder="ex: bonjour, sugarboard, splash" maxlength="24" oninput="updateOutput()">
+    </div>
+    <div style="flex:1;min-width:120px">
+      <label>Largeur (colonnes)</label>
+      <input type="number" id="canvasWidth" value="64" min="32" max="256" step="1" onchange="resizeCanvas()">
+      <div class="small">Min 32 = pas de défilement. Max 256.</div>
+    </div>
+  </div>
+</div>
+
+<div class="step">
+  <h2>2. Importer un code existant</h2>
+  <div class="small" style="margin-bottom:6px">Colle un code généré par <code>decor_share.html</code> (format <code>NOM:</code>/<code>PIXELS:</code>) ou par ce studio (format C++). La largeur sera détectée automatiquement.</div>
+  <textarea id="importIn" style="height:90px" placeholder="Colle ton code ici…"></textarea>
+  <div class="row" style="margin-top:8px;align-items:center">
+    <button class="play" onclick="importCode()">⬇ Charger</button>
+    <span id="importStatus" class="small"></span>
+  </div>
+</div>
+
+<div class="step">
+  <h2>3. Couleur</h2>
+  <div class="pal-panel" id="palette"></div>
+</div>
+
+<div class="step">
+  <h2>4. Outils</h2>
+  <div class="row" style="align-items:center">
+    <button class="tool-btn active" data-tool="auto" onclick="setTool('auto')" title="Auto — clic = peint, re-clic même couleur = efface">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="1" y="6" width="22" height="12" rx="6"/><circle cx="16" cy="12" r="3" fill="currentColor"/>
+      </svg> Auto
+    </button>
+    <button class="tool-btn" data-tool="pen" onclick="setTool('pen')" title="Stylo">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+      </svg> Stylo
+    </button>
+    <button class="tool-btn" data-tool="eraser" onclick="setTool('eraser')" title="Gomme">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M20 20H7L3 16c-1-1-1-2 0-3l9-9c1-1 2-1 3 0l6 6c1 1 1 2 0 3l-7 7"/><path d="M5 11l9 9"/>
+      </svg> Gomme
+    </button>
+    <span style="width:1px;height:22px;background:var(--border);margin:0 4px"></span>
+    <button onclick="clearAll()">Effacer tout</button>
+    <button onclick="shiftGrid(-1,0)" title="Décaler à gauche">←</button>
+    <button onclick="shiftGrid(1,0)" title="Décaler à droite">→</button>
+    <button onclick="shiftGrid(0,-1)" title="Décaler en haut">↑</button>
+    <button onclick="shiftGrid(0,1)" title="Décaler en bas">↓</button>
+  </div>
+</div>
+
+<div class="step">
+  <h2>5. Canvas d'édition</h2>
+  <div class="small">La zone surlignée à gauche (colonnes 0–31) est la fenêtre matrice visible au démarrage. Le reste défile par la suite.</div>
+  <div class="edit-wrap">
+    <div id="canvas"></div>
+  </div>
+</div>
+
+<div class="step">
+  <h2>6. Aperçu animé (matrice 32×8)</h2>
+  <div class="preview-stage">
+    <div id="preview"></div>
+  </div>
+  <div class="anim-ctrls">
+    <div class="field">
+      <label>Pas de défilement (px)</label>
+      <select id="step">
+        <option value="1" selected>1 px</option>
+        <option value="2">2 px</option>
+        <option value="4">4 px</option>
+        <option value="8">8 px</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Délai entre pas (ms)</label>
+      <input type="number" id="delay" value="80" min="10" max="2000" step="10">
+    </div>
+    <div class="field">
+      <label>Mode</label>
+      <select id="mode">
+        <option value="once" selected>Une fois (gauche → droite)</option>
+        <option value="bounce">Aller-retour</option>
+        <option value="loop">En boucle</option>
+      </select>
+    </div>
+  </div>
+  <div class="play-row">
+    <button class="play" id="playBtn" onclick="togglePlay()">▶ Play</button>
+    <button onclick="resetAnim()">⟲ Reset</button>
+    <span class="pos" id="posLabel">offset 0 / 0</span>
+  </div>
+</div>
+
+<div class="step">
+  <h2>7. Code à copier-coller</h2>
+  <div class="code-wrap">
+    <textarea id="output" readonly placeholder="Dessine quelque chose, le code apparaîtra ici…"></textarea>
+    <button class="copy-btn" id="copyBtn" onclick="copyOutput()" title="Copier" aria-label="Copier">
+      <svg id="copyIconDefault" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+      </svg>
+      <svg id="copyIconOk" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:none">
+        <polyline points="20 6 9 17 4 12"></polyline>
+      </svg>
+    </button>
+  </div>
+  <span id="copyStatus" class="small"></span>
+</div>
+
+<script>
+const H = 8;                  // hauteur fixe (matrice TC001)
+const VIEW_W = 32;            // fenêtre matrice
+let W = 64;                   // largeur du design (modifiable)
+let pixels = new Array(W*H).fill('#000000');
+let currentColor = '#FF0000';
+let currentTool = 'auto';
+let dragMode = 1;
+
+// ── Layout pixels : column-major (column par column de haut en bas) ──────────
+// idx = col * H + row → permet le grid-auto-flow:column de CSS
+function idx(col, row) { return col * H + row; }
+
+function setTool(t) {
+  currentTool = t;
+  document.querySelectorAll('.tool-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.tool === t));
+}
+
+// ── Palette HSL (reprise de decor_share) ────────────────────────────────────
+const HUES = [
+  {name:'Rouge',  h:  0},{name:'Orange', h: 25},{name:'Jaune',  h: 55},
+  {name:'Lime',   h: 80},{name:'Vert',   h:120},{name:'Cyan',   h:175},
+  {name:'Bleu',   h:210},{name:'Indigo', h:240},{name:'Violet', h:270},
+  {name:'Magenta',h:300},{name:'Rose',   h:330},
+];
+const LIGHTNESS = [70, 55, 40, 25];
+
+function hsl2hex(h, s, l) {
+  s /= 100; l /= 100;
+  const k = n => (n + h/30) % 12;
+  const a = s * Math.min(l, 1-l);
+  const f = n => l - a * Math.max(-1, Math.min(k(n)-3, Math.min(9-k(n), 1)));
+  const to = x => Math.round(255*x).toString(16).padStart(2,'0').toUpperCase();
+  return '#' + to(f(0)) + to(f(8)) + to(f(4));
+}
+
+function buildPalette() {
+  const p = document.getElementById('palette');
+  p.innerHTML = '';
+  const rrow = document.createElement('div');
+  rrow.className = 'pal-row';
+  rrow.innerHTML = '<div class="lbl">Récents</div><div class="swatches" id="paletteRecentSwatches"></div>';
+  p.appendChild(rrow);
+
+  const grays = ['#FFFFFF','#D0D0D0','#A0A0A0','#707070','#404040','#202020','#000000'];
+  const grow = document.createElement('div');
+  grow.className = 'pal-row';
+  grow.innerHTML = '<div class="lbl">Gris</div>';
+  const gsw = document.createElement('div'); gsw.className = 'swatches';
+  for (const c of grays) gsw.appendChild(makeSwatch(c));
+  grow.appendChild(gsw); p.appendChild(grow);
+
+  for (const hue of HUES) {
+    const row = document.createElement('div');
+    row.className = 'pal-row';
+    row.innerHTML = `<div class="lbl">${hue.name}</div>`;
+    const sws = document.createElement('div'); sws.className = 'swatches';
+    for (const l of LIGHTNESS) sws.appendChild(makeSwatch(hsl2hex(hue.h, 100, l)));
+    sws.appendChild(makeSwatch(hsl2hex(hue.h, 60, 55)));
+    sws.appendChild(makeSwatch(hsl2hex(hue.h, 40, 65)));
+    row.appendChild(sws); p.appendChild(row);
+  }
+}
+
+function makeSwatch(c) {
+  const sw = document.createElement('div');
+  sw.className = 'sw';
+  sw.style.background = c;
+  sw.dataset.color = c;
+  if (c.toUpperCase() === currentColor.toUpperCase()) sw.classList.add('active');
+  sw.onclick = () => setColor(c);
+  return sw;
+}
+
+let recentColors = [];
+try { recentColors = JSON.parse(localStorage.getItem('decor_boot_recent_colors') || '[]'); } catch(e) {}
+
+function setColor(c) {
+  currentColor = c;
+  if (currentTool === 'eraser') setTool('auto');
+  document.querySelectorAll('.sw').forEach(x =>
+    x.classList.toggle('active', x.dataset.color && x.dataset.color.toUpperCase() === c.toUpperCase()));
+  recentColors = [c, ...recentColors.filter(x => x.toUpperCase() !== c.toUpperCase())].slice(0, 12);
+  try { localStorage.setItem('decor_boot_recent_colors', JSON.stringify(recentColors)); } catch(e) {}
+  renderRecent();
+}
+
+function renderRecent() {
+  const el = document.getElementById('paletteRecentSwatches');
+  if (!el) return;
+  el.innerHTML = '';
+  const colors = recentColors.length ? recentColors : [currentColor];
+  for (const c of colors) {
+    const sw = document.createElement('div');
+    sw.className = 'sw';
+    if (c.toUpperCase() === currentColor.toUpperCase()) sw.classList.add('active');
+    sw.style.background = c; sw.dataset.color = c;
+    sw.onclick = () => setColor(c);
+    el.appendChild(sw);
+  }
+}
+
+// ── Canvas d'édition ────────────────────────────────────────────────────────
+function buildCanvas() {
+  const c = document.getElementById('canvas');
+  c.innerHTML = '';
+  c.style.gridTemplateColumns = `repeat(${W}, 16px)`;
+  for (let col = 0; col < W; col++) {
+    for (let row = 0; row < H; row++) {
+      const i = idx(col, row);
+      const px = document.createElement('div');
+      px.dataset.i = i;
+      px.style.background = pixels[i];
+      if (col < VIEW_W) px.classList.add('matrix-mark');
+      px.addEventListener('mousedown', e => { e.preventDefault(); paintStart(i); });
+      px.addEventListener('mouseenter', e => { if (e.buttons & 1) paint(i); });
+      px.addEventListener('touchstart', e => { e.preventDefault(); paintStart(i); }, {passive:false});
+      c.appendChild(px);
+    }
+  }
+  c.addEventListener('touchmove', e => {
+    e.preventDefault();
+    const t = e.touches[0];
+    const el = document.elementFromPoint(t.clientX, t.clientY);
+    if (el && el.dataset && el.dataset.i !== undefined) paint(parseInt(el.dataset.i));
+  }, {passive:false});
+}
+
+function paintStart(i) {
+  if (currentTool === 'auto') {
+    dragMode = (pixels[i] !== '#000000' && pixels[i].toUpperCase() === currentColor.toUpperCase()) ? 0 : 1;
+  }
+  paint(i);
+}
+
+function paint(i) {
+  let v;
+  if (currentTool === 'pen') v = currentColor;
+  else if (currentTool === 'eraser') v = '#000000';
+  else v = (dragMode === 1) ? currentColor : '#000000';
+  pixels[i] = v;
+  const cells = document.getElementById('canvas').children;
+  if (cells[i]) cells[i].style.background = v;
+  schedulePreview();
+  updateOutput();
+}
+
+function clearAll() {
+  pixels = new Array(W*H).fill('#000000');
+  refreshCanvas();
+  resetAnim();
+  updateOutput();
+}
+
+function refreshCanvas() {
+  const cells = document.getElementById('canvas').children;
+  for (let i = 0; i < W*H; i++) if (cells[i]) cells[i].style.background = pixels[i];
+  schedulePreview();
+}
+
+// Décale tout le contenu (dx colonnes, dy rangées) sans wrap
+function shiftGrid(dx, dy) {
+  const next = new Array(W*H).fill('#000000');
+  for (let col = 0; col < W; col++) {
+    for (let row = 0; row < H; row++) {
+      const nc = col + dx, nr = row + dy;
+      if (nc>=0 && nc<W && nr>=0 && nr<H) next[idx(nc, nr)] = pixels[idx(col, row)];
+    }
+  }
+  pixels = next;
+  refreshCanvas();
+  updateOutput();
+}
+
+function resizeCanvas() {
+  const newW = Math.max(32, Math.min(256, parseInt(document.getElementById('canvasWidth').value) || 64));
+  document.getElementById('canvasWidth').value = newW;
+  const next = new Array(newW*H).fill('#000000');
+  // Conserve le contenu existant à gauche, crop ou ajoute du noir à droite
+  const copyW = Math.min(W, newW);
+  for (let col = 0; col < copyW; col++) {
+    for (let row = 0; row < H; row++) next[col*H + row] = pixels[col*H + row];
+  }
+  W = newW;
+  pixels = next;
+  buildCanvas();
+  resetAnim();
+  updateOutput();
+}
+
+// ── Preview matrice 32×8 + animation ───────────────────────────────────────
+let previewCells = null;
+let animTimer = null;
+let animOffset = 0;          // colonne de gauche actuellement affichée
+let animDir = 1;             // 1 = →, -1 = ←
+let isPlaying = false;
+
+function buildPreview() {
+  const p = document.getElementById('preview');
+  p.innerHTML = '';
+  p.style.gridTemplateColumns = `repeat(${VIEW_W}, 1fr)`;
+  for (let col = 0; col < VIEW_W; col++) {
+    for (let row = 0; row < H; row++) {
+      const d = document.createElement('div');
+      p.appendChild(d);
+    }
+  }
+  previewCells = p.children;
+  renderPreview();
+}
+
+function renderPreview() {
+  if (!previewCells) return;
+  for (let col = 0; col < VIEW_W; col++) {
+    const srcCol = animOffset + col;
+    for (let row = 0; row < H; row++) {
+      const cellIdx = col * H + row;
+      const cell = previewCells[cellIdx];
+      if (srcCol >= 0 && srcCol < W) cell.style.background = pixels[srcCol * H + row];
+      else cell.style.background = '#000';
+    }
+  }
+  const maxOffset = Math.max(0, W - VIEW_W);
+  document.getElementById('posLabel').textContent = `offset ${animOffset} / ${maxOffset}`;
+}
+
+let previewRaf = 0;
+function schedulePreview() {
+  if (previewRaf) return;
+  previewRaf = requestAnimationFrame(() => { previewRaf = 0; renderPreview(); });
+}
+
+function togglePlay() {
+  if (isPlaying) stopAnim();
+  else startAnim();
+}
+
+function startAnim() {
+  stopAnim();
+  isPlaying = true;
+  document.getElementById('playBtn').textContent = '⏸ Pause';
+  const stepPx = parseInt(document.getElementById('step').value) || 1;
+  const delay  = parseInt(document.getElementById('delay').value) || 80;
+  const mode   = document.getElementById('mode').value;
+  const maxOffset = Math.max(0, W - VIEW_W);
+
+  if (maxOffset === 0) { stopAnim(); return; }   // pas de défilement nécessaire
+
+  animTimer = setInterval(() => {
+    animOffset += stepPx * animDir;
+    if (animOffset >= maxOffset) {
+      animOffset = maxOffset;
+      if (mode === 'once')      { renderPreview(); stopAnim(); return; }
+      if (mode === 'bounce')    { animDir = -1; }
+      if (mode === 'loop')      { animOffset = 0; }
+    } else if (animOffset <= 0) {
+      animOffset = 0;
+      if (mode === 'bounce')    { animDir = 1; }
+    }
+    renderPreview();
+  }, delay);
+}
+
+function stopAnim() {
+  if (animTimer) { clearInterval(animTimer); animTimer = null; }
+  isPlaying = false;
+  document.getElementById('playBtn').textContent = '▶ Play';
+}
+
+function resetAnim() {
+  stopAnim();
+  animOffset = 0;
+  animDir = 1;
+  renderPreview();
+}
+
+// ── Output : code C++ pour Sugarboard ──────────────────────────────────────
+function hex2rgb565(hex) {
+  if (!hex || hex === '#000000') return 0;
+  const r = parseInt(hex.slice(1,3),16);
+  const g = parseInt(hex.slice(3,5),16);
+  const b = parseInt(hex.slice(5,7),16);
+  return ((r&0xF8)<<8) | ((g&0xFC)<<3) | (b>>3);
+}
+
+// Réordonne column-major → row-major (pour la matrice qui scanne ligne par ligne)
+function pixelsRowMajor() {
+  const out = new Array(W*H);
+  for (let row = 0; row < H; row++) {
+    for (let col = 0; col < W; col++) out[row*W + col] = pixels[col*H + row];
+  }
+  return out;
+}
+
+function updateOutput() {
+  const ta = document.getElementById('output');
+  const hasContent = pixels.some(c => c !== '#000000');
+  if (!hasContent) { ta.value = ''; return; }
+
+  const name  = (document.getElementById('presetName').value.trim() || 'boot').replace(/[^a-z0-9_]/gi, '_').toLowerCase();
+  const stepPx = parseInt(document.getElementById('step').value) || 1;
+  const delay  = parseInt(document.getElementById('delay').value) || 80;
+  const mode   = document.getElementById('mode').value;
+
+  const rowMajor = pixelsRowMajor();
+  const bytes = rowMajor.map(c => '0x' + hex2rgb565(c).toString(16).toUpperCase().padStart(4,'0'));
+
+  // Format C++ : 16 valeurs par ligne, indenté
+  const lines = [];
+  for (let i = 0; i < bytes.length; i += 16) {
+    lines.push('    ' + bytes.slice(i, i+16).join(', ') + (i+16 < bytes.length ? ',' : ''));
+  }
+
+  const NAME = name.toUpperCase();
+  ta.value =
+`// ═══════════════════════════════════════════════════════════
+// 🎨 Boot screen Sugarboard — "${name}"
+// Date: ${new Date().toLocaleString('fr-FR')}
+// Largeur: ${W} px (${W - VIEW_W} px à défiler)
+// Animation: step=${stepPx}px delay=${delay}ms mode=${mode}
+// ═══════════════════════════════════════════════════════════
+
+static const uint16_t boot_${name}_W = ${W};
+static const uint8_t  boot_${name}_H = ${H};
+static const uint16_t boot_${name}_STEP_PX = ${stepPx};
+static const uint16_t boot_${name}_DELAY_MS = ${delay};
+// mode: "once" | "bounce" | "loop"
+#define BOOT_${NAME}_MODE_${mode.toUpperCase()}
+
+static const uint16_t boot_${name}[${W*H}] PROGMEM = {
+${lines.join('\n')}
+};
+`;
+}
+
+function copyOutput() {
+  const ta = document.getElementById('output');
+  if (!ta.value) {
+    document.getElementById('copyStatus').textContent = '⚠ Dessine d\'abord quelque chose';
+    return;
+  }
+  ta.select();
+  navigator.clipboard.writeText(ta.value).then(() => {
+    const btn = document.getElementById('copyBtn');
+    const def = document.getElementById('copyIconDefault');
+    const ok  = document.getElementById('copyIconOk');
+    btn.classList.add('ok');
+    def.style.display = 'none';
+    ok.style.display = 'block';
+    const s = document.getElementById('copyStatus');
+    s.textContent = '✓ Copié';
+    s.className = 'small ok';
+    setTimeout(() => {
+      btn.classList.remove('ok');
+      def.style.display = 'block';
+      ok.style.display = 'none';
+      s.textContent = ''; s.className = 'small';
+    }, 1800);
+  });
+}
+
+// ── Import : parse le format decor_share (NOM:/PIXELS:) ou C++ (boot_xxx[]) ─
+function importCode() {
+  const raw = document.getElementById('importIn').value;
+  const status = document.getElementById('importStatus');
+  if (!raw.trim()) { status.textContent = '⚠ Colle un code d\'abord'; status.className = 'small'; return; }
+
+  // 1. Extrait le nom (NOM: foo  ou  boot_foo[N])
+  let name = '';
+  let m = raw.match(/^\s*NOM\s*:\s*([^\s]+)/im);
+  if (m) name = m[1];
+  else if ((m = raw.match(/boot_([a-z0-9_]+)\s*\[/i))) name = m[1];
+
+  // 2. Largeur explicite si présente (boot_xxx_W = N)
+  let importedW = null;
+  if ((m = raw.match(/_W\s*=\s*(\d+)/))) importedW = parseInt(m[1]);
+
+  // 3. Extrait toutes les valeurs hex 0xNNNN (row-major dans les deux formats)
+  const hexMatches = raw.match(/0x[0-9a-f]{1,4}/gi);
+  if (!hexMatches || hexMatches.length === 0) {
+    status.textContent = '✗ Aucune valeur hex 0xNNNN trouvée'; status.className = 'small';
+    return;
+  }
+  const values = hexMatches.map(x => parseInt(x, 16));
+  const total = values.length;
+
+  // 4. Détermine la largeur : explicite > déduite (total/8) > erreur
+  let importedWidth = importedW || (total % H === 0 ? total / H : null);
+  if (!importedWidth) {
+    status.textContent = `✗ ${total} valeurs ne sont pas un multiple de ${H} (hauteur)`;
+    status.className = 'small';
+    return;
+  }
+  if (importedWidth < 32 || importedWidth > 256) {
+    status.textContent = `✗ Largeur ${importedWidth} hors bornes (32–256)`;
+    status.className = 'small';
+    return;
+  }
+
+  // 5. Applique : adapte W, convertit row-major → column-major (format interne)
+  W = importedWidth;
+  document.getElementById('canvasWidth').value = W;
+  pixels = new Array(W*H).fill('#000000');
+  for (let row = 0; row < H; row++) {
+    for (let col = 0; col < W; col++) {
+      const v = values[row*W + col] | 0;
+      pixels[col*H + row] = rgb565toHex(v);
+    }
+  }
+  if (name) document.getElementById('presetName').value = name;
+  buildCanvas();
+  resetAnim();
+  updateOutput();
+  status.textContent = `✓ Importé : ${total} pixels (${W}×${H})${name ? ' "' + name + '"' : ''}`;
+  status.className = 'small ok';
+}
+
+// RGB565 (16 bits) → hex #RRGGBB
+function rgb565toHex(v) {
+  if (!v) return '#000000';
+  const r5 = (v >> 11) & 0x1F;
+  const g6 = (v >>  5) & 0x3F;
+  const b5 =  v        & 0x1F;
+  // Reconstruit 8 bits avec bit-replication (standard pour upscaling)
+  const r = (r5 << 3) | (r5 >> 2);
+  const g = (g6 << 2) | (g6 >> 4);
+  const b = (b5 << 3) | (b5 >> 2);
+  const hex = n => n.toString(16).padStart(2,'0').toUpperCase();
+  return '#' + hex(r) + hex(g) + hex(b);
+}
+
+// ── Hooks contrôles animation ──────────────────────────────────────────────
+['step','delay','mode'].forEach(id =>
+  document.getElementById(id).addEventListener('change', () => {
+    updateOutput();
+    if (isPlaying) startAnim();   // relance avec nouveaux params
+  }));
+
+buildPalette();
+buildCanvas();
+buildPreview();
+renderRecent();
+updateOutput();
+</script>
+
+</body>
+</html>
